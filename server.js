@@ -878,8 +878,14 @@ async function saveBufferResult(buffer, outputPath, fallbackPrefix) {
 }
 
 async function refineAlphaBuffer(buffer, args = {}) {
+  const backend = String(args.backend || args.background_backend || '').toLowerCase();
   const feather = Number(args.alpha_feather || 0);
-  const threshold = args.alpha_threshold === undefined ? undefined : Number(args.alpha_threshold);
+  const threshold =
+    args.alpha_threshold === undefined
+      ? backend === 'imgly'
+        ? Number(env('IMAGE_MCP_DEFAULT_BG_ALPHA_THRESHOLD') || 24)
+        : undefined
+      : Number(args.alpha_threshold);
   if ((!Number.isFinite(feather) || feather <= 0) && threshold === undefined) return buffer;
 
   const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -967,7 +973,7 @@ async function autoCropImage(args) {
 
 async function backgroundRemoveImage(args) {
   const { buffer: outputBuffer, backend, model } = await removeBackgroundBuffer(args);
-  const refinedBuffer = await refineAlphaBuffer(outputBuffer, args);
+  const refinedBuffer = await refineAlphaBuffer(outputBuffer, { ...args, backend });
   const output_path = await saveBufferResult(refinedBuffer, args.output_path, 'background-remove');
   return {
     type: 'image',
@@ -1016,7 +1022,7 @@ async function finalizeImage(args) {
   }
 
   const output_path = await saveSharpResult(pipeline, args.output_path, 'finalize');
-  const outputBuffer = await refineAlphaBuffer(await fs.readFile(output_path), args);
+  const outputBuffer = await refineAlphaBuffer(await fs.readFile(output_path), { ...args, backend: backgroundInfo?.backend, background_backend: backgroundInfo?.backend });
   await fs.writeFile(output_path, outputBuffer);
   const outputMetadata = await sharp(outputBuffer, { failOn: 'none' }).metadata();
   return {

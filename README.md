@@ -30,6 +30,7 @@ Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
 Set the default local background-removal backend with `IMAGE_MCP_DEFAULT_BG_BACKEND` (`rmbg` or `imgly`).
+Set `IMAGE_MCP_DEFAULT_BG_ALPHA_THRESHOLD` to a number like `24` if you want the quality backend to default to a tighter mask for logos/header assets.
 Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
 The local transform tools, background removal, and finalize workflow do not require provider keys. Only generation and edit routes need API keys.
 
@@ -142,6 +143,7 @@ Backend notes:
 - `imgly` is the higher-quality path and uses `small` or `medium`
 - Both backends run locally and do not need API keys
 - Expect the quality backend to use more RAM and disk for model assets
+- For logo/header artwork, a threshold like `24` often removes leftover white halo pixels better than the raw output
 
 Resource notes:
 
