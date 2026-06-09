@@ -14,7 +14,7 @@ const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
 const DEFAULT_MODEL_BY_PROVIDER = {
   kilo: 'black-forest-labs/flux.2-pro',
-  openrouter: 'black-forest-labs/flux.2-pro',
+  openrouter: 'google/gemini-2.5-flash-image',
   openai: 'gpt-5-image',
   gemini: 'gemini-3-pro-image-preview'
 };
@@ -104,12 +104,18 @@ function env(name) {
 }
 
 function outputDir() {
-  return env('IMAGE_MCP_OUTPUT_DIR').trim() || DEFAULT_OUTPUT_DIR;
+  const configured = env('IMAGE_MCP_OUTPUT_DIR').trim();
+  if (configured) return path.resolve(configured);
+  return path.resolve(process.cwd(), DEFAULT_OUTPUT_DIR);
 }
 
 async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true });
   return dir;
+}
+
+async function ensureOutputDir() {
+  return ensureDir(outputDir());
 }
 
 function mimeFromDataUrl(url) {
@@ -137,6 +143,16 @@ function defaultModel(provider) {
 function modelFor(provider, model) {
   if (model) return model;
   return defaultModel(provider);
+}
+
+function modalitiesForModel(provider, model, requestedModalities) {
+  if (Array.isArray(requestedModalities) && requestedModalities.length) return requestedModalities;
+  if (provider === 'openrouter') {
+    const imageOnlyModels = ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex', 'sourceful/riverflow-v2-fast', 'sourceful/riverflow-v2-pro', 'sourceful/riverflow-v2.5-fast', 'sourceful/riverflow-v2.5-pro', 'recraft/recraft-v3'];
+    if (imageOnlyModels.includes(model)) return ['image'];
+    return ['image', 'text'];
+  }
+  return ['image', 'text'];
 }
 
 function aspectToSize(aspect) {
@@ -201,12 +217,18 @@ async function writeImage(outputPath, b64) {
 }
 
 async function writeImageResult(result, outputPath) {
-  if (!outputPath || !result?.data) return result;
-  await ensureDir(path.dirname(outputPath));
-  const target = path.resolve(outputPath);
+  if (!result?.data) return result;
+  const baseDir = await ensureOutputDir();
+  const target = outputPath ? path.resolve(outputPath) : path.join(baseDir, outputFileName('image'));
+  await ensureDir(path.dirname(target));
   const decoded = result.data.startsWith('data:') ? mimeFromDataUrl(result.data) : { mimeType: result.mimeType || 'image/png', base64: result.data };
   await fs.writeFile(target, Buffer.from(decoded.base64, 'base64'));
   return { ...result, mimeType: decoded.mimeType, output_path: target };
+}
+
+function outputFileName(prefix = 'image') {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${prefix}-${stamp}.png`;
 }
 
 function imageTextResult(b64, outputPath) {
@@ -438,7 +460,7 @@ async function openrouterImagesGenerations(args) {
             : [{ type: 'text', text: prompt }]
         }
       ],
-      modalities: args.modalities && args.modalities.length ? args.modalities : ['image', 'text'],
+      modalities: modalitiesForModel('openrouter', modelFor('openrouter', args.model), args.modalities),
       ...(Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
       ...(args.input_images?.length ? { input_images: args.input_images } : {}),
       ...(args.max_tokens ? { max_tokens: args.max_tokens } : {})
@@ -543,7 +565,7 @@ async function listImageModels() {
     outputDir: outputDir(),
     openrouter: {
       imageGeneration: {
-        modalities: ['image', 'text'],
+        modalities: ['image', 'text', 'image-only'],
         imageConfig: ['aspect_ratio', 'size', 'quality', 'background', 'output_format', 'moderation']
       }
     }
