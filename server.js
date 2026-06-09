@@ -31,6 +31,42 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
+function configuredKey(name) {
+  const value = env(name).trim();
+  return value || undefined;
+}
+
+function providerKey(provider) {
+  if (provider === 'kilo') return configuredKey('KILO_API_KEY');
+  if (provider === 'openrouter') return configuredKey('OPENROUTER_API_KEY');
+  if (provider === 'openai') return configuredKey('OPENAI_API_KEY');
+  if (provider === 'gemini') return configuredKey('GEMINI_API_KEY');
+  return undefined;
+}
+
+function requireProviderKey(provider) {
+  const key = providerKey(provider);
+  if (!key) {
+    throw Object.assign(new Error(`${provider} API key is not configured`), {
+      code: 'missing_api_key',
+      retryable: false,
+      details: { provider }
+    });
+  }
+  return key;
+}
+
+function validateStartup() {
+  const provider = providerFrom();
+  if (!providerKey(provider)) {
+    throw Object.assign(new Error(`Default provider ${provider} requires a configured API key`), {
+      code: 'missing_api_key',
+      retryable: false,
+      details: { provider }
+    });
+  }
+}
+
 function env(name) {
   return process.env[name] || '';
 }
@@ -159,7 +195,7 @@ async function kiloImagesGenerations(args) {
       ...(args.steps ? { steps: args.steps } : {}),
       ...(input_image ? { input_image } : {})
     },
-    { headers: { Authorization: `Bearer ${env('KILO_API_KEY')}`, 'Content-Type': 'application/json' } }
+    { headers: { Authorization: `Bearer ${requireProviderKey('kilo')}`, 'Content-Type': 'application/json' } }
   );
 
   const b64 = response?.data?.data?.[0]?.b64_json;
@@ -181,7 +217,7 @@ async function kiloImageEdits(args) {
       ...(args.steps ? { steps: args.steps } : {}),
       input_image: image
     },
-    { headers: { Authorization: `Bearer ${env('KILO_API_KEY')}`, 'Content-Type': 'application/json' } }
+    { headers: { Authorization: `Bearer ${requireProviderKey('kilo')}`, 'Content-Type': 'application/json' } }
   );
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.image?.b64_json;
@@ -200,7 +236,7 @@ async function openaiImageEdits(args) {
   if (args.size || args.width || args.height) form.append('size', `${dimensions(args).width}x${dimensions(args).height}`);
 
   const response = await axios.post('https://api.openai.com/v1/images/edits', form, {
-    headers: { Authorization: `Bearer ${env('OPENAI_API_KEY')}`, ...form.getHeaders() }
+    headers: { Authorization: `Bearer ${requireProviderKey('openai')}`, ...form.getHeaders() }
   });
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
@@ -219,7 +255,7 @@ async function openrouterImageEdits(args) {
 
   const response = await axios.post('https://openrouter.ai/api/v1/images/edits', form, {
     headers: {
-      Authorization: `Bearer ${env('OPENROUTER_API_KEY')}`,
+      Authorization: `Bearer ${requireProviderKey('openrouter')}`,
       'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp',
       'X-Title': '@jgkme/kilo-image-gen-mcp',
       ...form.getHeaders()
@@ -251,7 +287,7 @@ async function providerChatCompletion(provider, args) {
       : provider === 'openai'
         ? 'https://api.openai.com/v1'
         : 'https://generativelanguage.googleapis.com/v1beta/openai';
-  const apiKey = provider === 'openrouter' ? env('OPENROUTER_API_KEY') : provider === 'openai' ? env('OPENAI_API_KEY') : env('GEMINI_API_KEY');
+  const apiKey = requireProviderKey(provider);
 
   const response = await axios.post(
     `${baseURL}/chat/completions`,
@@ -406,4 +442,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 });
 
-await server.connect(new StdioServerTransport());
+try {
+  validateStartup();
+  await server.connect(new StdioServerTransport());
+} catch (error) {
+  process.stderr.write(`${errorResult(error)}\n`);
+  process.exit(1);
+}
