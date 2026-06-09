@@ -40,6 +40,8 @@ Default model notes:
 | `prompt` | string | Required |
 | `provider` | string | `kilo`, `openrouter`, `openai`, `gemini` |
 | `model` | string | Optional. Defaults from `IMAGE_MCP_DEFAULT_MODEL` or provider default |
+| `purpose` | string | Optional. Helps normalize the prompt for a specific use case |
+| `style` | string | Optional. Helps normalize the prompt's visual style |
 | `size` | string | Example `1024x1024` |
 | `width` / `height` | number | Overrides `size` |
 | `aspect` | string | `square`, `landscape`, `portrait` |
@@ -56,6 +58,8 @@ OpenRouter-first image generation tool with broader request options and response
 | `prompt` | string | Required |
 | `provider` | string | Defaults to `openrouter` if omitted |
 | `model` | string | Optional |
+| `purpose` | string | Optional. Helps normalize the prompt for a specific use case |
+| `style` | string | Optional. Helps normalize the prompt's visual style |
 | `input_image` | string | Optional reference image |
 | `input_images` | string[] | Optional reference image list for OpenRouter chat-image models |
 | `modalities` | string[] | Optional override, defaults to `['image', 'text']` for OpenRouter |
@@ -135,6 +139,8 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 
 - `provider` defaults to `IMAGE_MCP_DEFAULT_PROVIDER` or `kilo`
 - `model` defaults to `IMAGE_MCP_DEFAULT_MODEL` when set, otherwise to the provider default
+- `openai` defaults to `gpt-image-1`
+- `generate_image` and `edit_image` add light prompt normalization when `purpose`, `style`, `aspect`, or `quality` are provided
 - `aspect` maps to size when width and height are not provided
 - `input_image` can be a file path, base64 string, or URL
 - `output_path` writes the generated PNG to disk
@@ -148,7 +154,7 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 
 - `kilo` uses `https://api.kilo.ai/api/gateway/images/generations`
 - `openrouter` supports many image models, but not every model supports every modality combination. The server adapts the request shape per model and falls back to image-only when needed.
-- `openai` uses the Images API for generation and the Images API for edits
+- `openai` uses `gpt-image-1` for generation and the Images API for edits
 - `gemini` uses the OpenAI-compatible Gemini endpoint for generation and chat-style image flows where supported
 - Errors return structured JSON text with `code`, `message`, `details`, and `retryable`
 - For Kilo/OpenRouter, you can pick a different compatible model by setting `model` explicitly or by changing `IMAGE_MCP_DEFAULT_MODEL`

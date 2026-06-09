@@ -18,7 +18,7 @@ const PROJECT_OUTPUT_HINT_FILES = ['.image-mcp-output', '.image-mcp-output.json'
 const DEFAULT_MODEL_BY_PROVIDER = {
   kilo: 'black-forest-labs/flux.2-pro',
   openrouter: 'google/gemini-2.5-flash-image',
-  openai: 'gpt-5-image',
+  openai: 'gpt-image-1',
   gemini: 'gemini-2.5-flash-image'
 };
 const BACKGROUND_REMOVE_MODELS = ['u2netp', 'modnet', 'briaai'];
@@ -31,15 +31,14 @@ const KNOWN_MODELS = {
     'google/gemini-2.5-flash-image',
     'google/gemini-2.5-flash-image-preview',
     'google/gemini-3-pro-image-preview',
-    'openai/gpt-5-image',
-    'openai/gpt-5-image-mini',
+    'openai/gpt-image-1',
     'sourceful/riverflow-v2-fast',
     'sourceful/riverflow-v2-pro',
     'sourceful/riverflow-v2.5-fast',
     'sourceful/riverflow-v2.5-pro',
     'recraft/recraft-v3'
   ],
-  openai: ['gpt-5-image', 'gpt-5-image-mini'],
+  openai: ['gpt-image-1'],
   gemini: ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview']
 };
 
@@ -203,6 +202,39 @@ function modelFor(provider, model) {
   return defaultModel(provider);
 }
 
+function imageModelFor(provider, args = {}) {
+  if (args.model) return args.model;
+  if (provider === 'gemini') {
+    const quality = String(args.quality || '').toLowerCase();
+    if (quality === 'quality') return 'gemini-3-pro-image-preview';
+    if (quality === 'balanced') return 'gemini-3.1-flash-image-preview';
+    return 'gemini-2.5-flash-image';
+  }
+  if (provider === 'openrouter') {
+    const quality = String(args.quality || '').toLowerCase();
+    if (quality === 'quality') return 'google/gemini-3-pro-image-preview';
+    if (quality === 'balanced') return 'google/gemini-3.1-flash-image-preview';
+    return 'google/gemini-2.5-flash-image';
+  }
+  if (provider === 'openai') return 'gpt-image-1';
+  return defaultModel(provider);
+}
+
+function normalizedQuality(args = {}) {
+  const preset = String(args.quality || '').toLowerCase();
+  if (['fast', 'balanced', 'quality'].includes(preset)) return preset;
+  return undefined;
+}
+
+function providerQuality(provider, args = {}) {
+  const quality = normalizedQuality(args);
+  if (!quality) return undefined;
+  if (provider === 'openai' || provider === 'openrouter') {
+    return quality === 'fast' ? 'low' : quality === 'balanced' ? 'medium' : 'high';
+  }
+  return quality;
+}
+
 function modalitiesForModel(provider, model, requestedModalities) {
   if (Array.isArray(requestedModalities) && requestedModalities.length) return requestedModalities;
   if (provider === 'openrouter') {
@@ -233,7 +265,10 @@ function dimensions(args = {}) {
 
 function promptWithAspect(args) {
   const segments = [];
+  if (args.purpose) segments.push(`Purpose: ${args.purpose}.`);
   if (args.aspect) segments.push(`Aspect ratio: ${args.aspect}.`);
+  if (args.quality) segments.push(`Quality target: ${args.quality}.`);
+  if (args.style) segments.push(`Style: ${args.style}.`);
   if (args.steps) segments.push(`Generation steps: ${args.steps}.`);
   segments.push(args.prompt);
   return segments.join(' ').trim();
@@ -536,11 +571,12 @@ async function kiloImageEdits(args) {
 async function openaiImageEdits(args) {
   const image = await readImageBuffer(args.reference_image || args.input_image);
   const form = new FormData();
-  form.append('model', modelFor('openai', args.model));
+  form.append('model', imageModelFor('openai', args));
   form.append('prompt', promptWithAspect(args));
   form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
   if (args.output_path) form.append('response_format', 'b64_json');
   if (args.size || args.width || args.height) form.append('size', `${dimensions(args).width}x${dimensions(args).height}`);
+  if (providerQuality('openai', args)) form.append('quality', providerQuality('openai', args));
 
   const response = await axios.post('https://api.openai.com/v1/images/edits', form, {
     headers: { Authorization: `Bearer ${requireProviderKey('openai')}`, ...form.getHeaders() }
@@ -555,10 +591,11 @@ async function openaiImageEdits(args) {
 async function openrouterImageEdits(args) {
   const image = await readImageBuffer(args.reference_image || args.input_image);
   const form = new FormData();
-  form.append('model', modelFor('openrouter', args.model));
+  form.append('model', imageModelFor('openrouter', args));
   form.append('prompt', promptWithAspect(args));
   form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
   if (args.size || args.width || args.height) form.append('size', `${dimensions(args).width}x${dimensions(args).height}`);
+  if (providerQuality('openrouter', args)) form.append('quality', providerQuality('openrouter', args));
 
   const response = await axios.post('https://openrouter.ai/api/v1/images/edits', form, {
     headers: {
@@ -581,7 +618,7 @@ async function openrouterImagesGenerations(args) {
   const imageConfig = {
     ...(args.aspect ? { aspect_ratio: args.aspect === 'square' ? '1:1' : args.aspect === 'landscape' ? '16:9' : '9:16' } : {}),
     ...(args.size && args.size.includes('x') ? { size: args.size } : {}),
-    ...(args.quality ? { quality: args.quality } : {}),
+    ...(providerQuality('openrouter', args) ? { quality: providerQuality('openrouter', args) } : {}),
     ...(args.background ? { background: args.background } : {}),
     ...(args.output_format ? { output_format: args.output_format } : {}),
     ...(args.moderation ? { moderation: args.moderation } : {})
@@ -590,7 +627,7 @@ async function openrouterImagesGenerations(args) {
   const response = await axios.post(
     'https://openrouter.ai/api/v1/chat/completions',
     {
-      model: modelFor('openrouter', args.model),
+      model: imageModelFor('openrouter', args),
       messages: [
         {
           role: 'user',
@@ -599,7 +636,7 @@ async function openrouterImagesGenerations(args) {
             : [{ type: 'text', text: prompt }]
         }
       ],
-      modalities: modalitiesForModel('openrouter', modelFor('openrouter', args.model), args.modalities),
+      modalities: modalitiesForModel('openrouter', imageModelFor('openrouter', args), args.modalities),
       ...(Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
       ...(args.input_images?.length ? { input_images: args.input_images } : {}),
       ...(image ? {} : { input_images: [] }),
@@ -640,10 +677,10 @@ async function openaiImageGenerations(args) {
   const response = await axios.post(
     'https://api.openai.com/v1/images/generations',
     {
-      model: modelFor('openai', args.model),
+      model: imageModelFor('openai', args),
       prompt,
       size: args.size || '1024x1024',
-      ...(args.quality ? { quality: args.quality } : {}),
+      ...(providerQuality('openai', args) ? { quality: providerQuality('openai', args) } : {}),
       ...(args.output_format ? { response_format: 'b64_json' } : {}),
       ...(image ? { input_image: image } : {})
     },
@@ -663,7 +700,7 @@ async function openaiImageGenerations(args) {
     const payload = payloads[index];
     const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
     if (args.output_path) {
-      images.push(await writeImageResult(image, uniqueOutputPath(args.output_path, `-${index + 1}`)));
+      images.push(await writeImageResult(image, index === 0 ? args.output_path : uniqueOutputPath(args.output_path, `-${index + 1}`)));
     } else {
       images.push(await writeImageResult(image, defaultSavedImagePath(`openai-${index + 1}`)));
     }
@@ -678,7 +715,7 @@ async function geminiImageGenerations(args) {
   const response = await axios.post(
     'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     {
-      model: modelFor('gemini', args.model),
+      model: imageModelFor('gemini', args),
       messages: [
         {
           role: 'user',
@@ -687,7 +724,7 @@ async function geminiImageGenerations(args) {
             : [{ type: 'text', text: prompt }]
         }
       ],
-      modalities: modalitiesForModel('gemini', modelFor('gemini', args.model), args.modalities),
+      modalities: modalitiesForModel('gemini', imageModelFor('gemini', args), args.modalities),
       ...(args.max_tokens ? { max_tokens: args.max_tokens } : {})
     },
     {
@@ -706,7 +743,7 @@ async function geminiImageGenerations(args) {
     const payload = payloads[index];
     const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
     if (args.output_path) {
-      images.push(await writeImageResult(image, uniqueOutputPath(args.output_path, `-${index + 1}`)));
+      images.push(await writeImageResult(image, index === 0 ? args.output_path : uniqueOutputPath(args.output_path, `-${index + 1}`)));
     } else {
       images.push(await writeImageResult(image, defaultSavedImagePath(`gemini-${index + 1}`)));
     }
@@ -738,7 +775,7 @@ async function providerChatCompletion(provider, args) {
   const response = await axios.post(
     `${baseURL}/chat/completions`,
     {
-      model: modelFor(provider, args.model),
+      model: imageModelFor(provider, args),
       messages,
       modalities: ['image', 'text']
     },
@@ -758,7 +795,7 @@ async function providerChatCompletion(provider, args) {
     const payload = payloads[index];
     const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
     if (args.output_path) {
-      images.push(await writeImageResult(image, `${args.output_path.replace(/\.png$/i, '')}-${index + 1}.png`));
+      images.push(await writeImageResult(image, index === 0 ? args.output_path : `${args.output_path.replace(/\.png$/i, '')}-${index + 1}.png`));
     } else {
       images.push(await writeImageResult(image, defaultSavedImagePath(`chat-${index + 1}`)));
     }
@@ -900,13 +937,16 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'kilo_generate_image',
       description:
-        'Generate an image using Kilo Gateway or a configured provider. Choose a provider by intent: default/general to black-forest-labs/flux.2-pro, fast drafts to black-forest-labs/flux.2-flex, in-image text to gpt-5-image, Gemini defaults to gemini-2.5-flash-image and also supports gemini-3.1-flash-image-preview and gemini-3-pro-image-preview. Provide subject, style, colors, mood, context, aspect ratio, transparency, and optional reference image.',
+        'Generate an image using Kilo Gateway or a configured provider. Choose a provider by intent: default/general to black-forest-labs/flux.2-pro, fast drafts to black-forest-labs/flux.2-flex, OpenAI uses gpt-image-1, Gemini defaults to gemini-2.5-flash-image and also supports gemini-3.1-flash-image-preview and gemini-3-pro-image-preview. Provide subject, style, colors, mood, context, aspect ratio, transparency, and optional reference image.',
       inputSchema: {
         type: 'object',
         properties: {
           prompt: { type: 'string' },
           provider: { type: 'string', enum: PROVIDERS },
           model: { type: 'string' },
+          quality: { type: 'string' },
+          purpose: { type: 'string' },
+          style: { type: 'string' },
           size: { type: 'string' },
           width: { type: 'number' },
           height: { type: 'number' },
@@ -927,6 +967,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           prompt: { type: 'string' },
           provider: { type: 'string', enum: PROVIDERS },
           model: { type: 'string' },
+          purpose: { type: 'string' },
+          style: { type: 'string' },
           size: { type: 'string' },
           width: { type: 'number' },
           height: { type: 'number' },
@@ -964,6 +1006,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           prompt: { type: 'string' },
           provider: { type: 'string', enum: PROVIDERS },
           model: { type: 'string' },
+          quality: { type: 'string' },
           size: { type: 'string' },
           width: { type: 'number' },
           height: { type: 'number' },
