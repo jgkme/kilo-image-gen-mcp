@@ -260,6 +260,9 @@ function collectImageParts(node, results = []) {
     node.message,
     node.message?.content,
     node.message?.images,
+    node.choices?.[0]?.message?.images,
+    node.choices?.[0]?.message?.content,
+    node.choices?.[0]?.message,
     node.content,
     node.images,
     node.output,
@@ -272,15 +275,28 @@ function collectImageParts(node, results = []) {
     if (Array.isArray(candidate)) {
       for (const part of candidate) {
         if (!part) continue;
+        if (typeof part === 'string') {
+          const stringPayload = normalizeBase64Payload(part);
+          if (stringPayload) results.push({ data: stringPayload, mimeType: mimeFromDataUrl(part).mimeType });
+          continue;
+        }
         const url = part?.image_url?.url || part?.imageUrl?.url || part?.url;
-        const data = normalizeBase64Payload(url) || normalizeBase64Payload(part?.data) || normalizeBase64Payload(part?.b64_json) || normalizeBase64Payload(part?.imageB64) || normalizeBase64Payload(part?.result);
+        const data = normalizeBase64Payload(url) || normalizeBase64Payload(part?.data) || normalizeBase64Payload(part?.b64_json) || normalizeBase64Payload(part?.imageB64) || normalizeBase64Payload(part?.result) || normalizeBase64Payload(part?.imageUrl?.url);
         if (data) results.push({ data, mimeType: part?.mime_type || part?.mimeType || mimeFromDataUrl(url || part?.data || '').mimeType });
       }
       continue;
     }
 
+    if (typeof candidate === 'string') {
+      const stringPayload = normalizeBase64Payload(candidate);
+      if (stringPayload) {
+        results.push({ data: stringPayload, mimeType: mimeFromDataUrl(candidate).mimeType });
+      }
+      continue;
+    }
+
     const url = candidate?.image_url?.url || candidate?.imageUrl?.url || candidate?.url;
-    const data = normalizeBase64Payload(url) || normalizeBase64Payload(candidate?.data) || normalizeBase64Payload(candidate?.b64_json) || normalizeBase64Payload(candidate?.imageB64) || normalizeBase64Payload(candidate?.result);
+    const data = normalizeBase64Payload(url) || normalizeBase64Payload(candidate?.data) || normalizeBase64Payload(candidate?.b64_json) || normalizeBase64Payload(candidate?.imageB64) || normalizeBase64Payload(candidate?.result) || normalizeBase64Payload(candidate?.imageUrl?.url);
     if (data) results.push({ data, mimeType: candidate?.mime_type || candidate?.mimeType || mimeFromDataUrl(url || candidate?.data || '').mimeType });
   }
 
@@ -463,6 +479,7 @@ async function openrouterImagesGenerations(args) {
       modalities: modalitiesForModel('openrouter', modelFor('openrouter', args.model), args.modalities),
       ...(Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
       ...(args.input_images?.length ? { input_images: args.input_images } : {}),
+      ...(image ? {} : { input_images: [] }),
       ...(args.max_tokens ? { max_tokens: args.max_tokens } : {})
     },
     {
@@ -515,7 +532,7 @@ async function providerChatCompletion(provider, args) {
     {
       model: modelFor(provider, args.model),
       messages,
-      modalities: ['image', 'text']
+      modalities: provider === 'openrouter' ? ['image', 'text'] : ['image', 'text']
     },
     {
       headers: {
