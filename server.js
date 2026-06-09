@@ -279,6 +279,31 @@ async function openrouterImageEdits(args) {
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
 
+async function openrouterImagesGenerations(args) {
+  const { width, height } = dimensions(args);
+  const image = await readImageInput(args.input_image);
+  const form = new FormData();
+  form.append('model', modelFor('openrouter', args.model));
+  form.append('prompt', promptWithAspect(args));
+  form.append('size', `${width}x${height}`);
+  if (args.steps) form.append('steps', String(args.steps));
+  if (image) form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
+
+  const response = await axios.post('https://openrouter.ai/api/v1/images/generations', form, {
+    headers: {
+      Authorization: `Bearer ${requireProviderKey('openrouter')}`,
+      'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp',
+      'X-Title': '@jgkme/kilo-image-gen-mcp',
+      ...form.getHeaders()
+    }
+  });
+
+  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
+  if (!b64) throw Object.assign(new Error('OpenRouter image generation did not include image data'), { retryable: false, response: response?.data });
+  const output_path = await writeImage(args.output_path, b64);
+  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+}
+
 async function providerChatCompletion(provider, args) {
   const { width, height } = dimensions(args);
   const prompt = promptWithAspect(args);
@@ -337,6 +362,7 @@ async function providerEditImage(provider, args) {
 async function generateImage(args) {
   const provider = providerFrom(args.provider);
   if (provider === 'kilo') return kiloImagesGenerations(args);
+  if (provider === 'openrouter') return openrouterImagesGenerations(args);
   return providerChatCompletion(provider, args);
 }
 
