@@ -97,6 +97,38 @@ Returns configured providers and defaults.
 
 Same shape as `kilo_generate_image`, but requires `input_image` and routes the prompt as an edit instruction. Native edit routes are used for Kilo, OpenAI, and OpenRouter when available, with chat-based fallback for other providers.
 
+### `background_remove`
+
+Locally removes a simple background and preserves transparency in a PNG output.
+
+| Input | Type | Notes |
+|---|---|---|
+| `input_image` | string | Required |
+| `output_path` | string | Optional output file path |
+
+### `resize_image`
+
+Locally resizes an image with aspect-ratio-preserving defaults.
+
+| Input | Type | Notes |
+|---|---|---|
+| `input_image` | string | Required |
+| `width` / `height` | number | Optional target dimensions |
+| `fit` | string | `cover`, `contain`, `fill`, `inside`, `outside` |
+| `background` | string | Optional flatten background color |
+| `output_path` | string | Optional output file path |
+
+### `auto_crop`
+
+Locally crops to target dimensions or trims surrounding whitespace when no size is provided.
+
+| Input | Type | Notes |
+|---|---|---|
+| `input_image` | string | Required |
+| `width` / `height` | number | Optional crop target |
+| `gravity` | string | Optional crop gravity |
+| `output_path` | string | Optional output file path |
+
 ## Behavior
 
 - `provider` defaults to `IMAGE_MCP_DEFAULT_PROVIDER` or `kilo`
@@ -107,6 +139,7 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
 - `generate_image` supports OpenRouter response normalization and multiple image payloads when present
 - `edit_image` treats `input_image` as the reference image and preserves subject/composition unless instructed otherwise
 - `edit_image` uses native edit endpoints for Kilo, OpenAI, and OpenRouter when possible
+- `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
 
 ## Provider notes
 

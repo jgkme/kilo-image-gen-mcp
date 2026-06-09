@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import FormData from 'form-data';
 import axios from 'axios';
+import sharp from 'sharp';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -46,6 +47,8 @@ const EDIT_CAPABILITIES = {
   openai: true,
   gemini: false
 };
+
+const PROCESSING_FITS = ['cover', 'contain', 'fill', 'inside', 'outside'];
 
 const server = new Server(
   { name: '@jgkme/kilo-image-gen-mcp', version: VERSION },
@@ -382,6 +385,30 @@ function validateArgs(args) {
   if (args.output_path && typeof args.output_path !== 'string') {
     throw Object.assign(new Error('output_path must be a string'), { code: 'validation_error', retryable: false });
   }
+  if (args.reference_image && typeof args.reference_image !== 'string') {
+    throw Object.assign(new Error('reference_image must be a string'), { code: 'validation_error', retryable: false });
+  }
+  if (args.input_image && typeof args.input_image !== 'string') {
+    throw Object.assign(new Error('input_image must be a string'), { code: 'validation_error', retryable: false });
+  }
+}
+
+function validateProcessingArgs(args) {
+  if (!args.input_image || typeof args.input_image !== 'string') {
+    throw Object.assign(new Error('input_image is required'), { code: 'validation_error', retryable: false });
+  }
+  if (args.output_path && typeof args.output_path !== 'string') {
+    throw Object.assign(new Error('output_path must be a string'), { code: 'validation_error', retryable: false });
+  }
+  if (args.width !== undefined && !Number.isFinite(args.width)) {
+    throw Object.assign(new Error('width must be a number'), { code: 'validation_error', retryable: false });
+  }
+  if (args.height !== undefined && !Number.isFinite(args.height)) {
+    throw Object.assign(new Error('height must be a number'), { code: 'validation_error', retryable: false });
+  }
+  if (args.fit && !PROCESSING_FITS.includes(args.fit)) {
+    throw Object.assign(new Error(`fit must be one of ${PROCESSING_FITS.join(', ')}`), { code: 'validation_error', retryable: false });
+  }
 }
 
 function errorResult(error) {
@@ -684,6 +711,69 @@ async function providerEditImage(provider, args) {
   });
 }
 
+async function loadSharpInput(input) {
+  const buffer = await readImageBuffer(input);
+  const image = sharp(buffer, { failOn: 'none' }).rotate();
+  const metadata = await image.metadata();
+  return { image, metadata };
+}
+
+async function saveSharpResult(image, outputPath, fallbackPrefix) {
+  const baseDir = await ensureOutputDir();
+  const target = outputPath ? path.resolve(process.cwd(), outputPath) : path.join(baseDir, outputFileName(fallbackPrefix));
+  await ensureDir(path.dirname(target));
+  const buffer = await image.png().toBuffer();
+  await fs.writeFile(target, buffer);
+  return target;
+}
+
+async function resizeImage(args) {
+  const { image } = await loadSharpInput(args.input_image);
+  const { width, height } = dimensions(args);
+  let pipeline = image.resize({
+    width,
+    height,
+    fit: args.fit || 'inside',
+    withoutEnlargement: true
+  });
+  if (args.background) pipeline = pipeline.flatten({ background: args.background });
+  const output_path = await saveSharpResult(pipeline, args.output_path, 'resize');
+  return { type: 'image', data: (await fs.readFile(output_path)).toString('base64'), mimeType: 'image/png', output_path };
+}
+
+async function autoCropImage(args) {
+  const { image, metadata } = await loadSharpInput(args.input_image);
+  const width = args.width || metadata.width;
+  const height = args.height || metadata.height;
+  let pipeline = image;
+  if (width && height) {
+    pipeline = pipeline.resize(width, height, { fit: 'cover', position: args.gravity || 'centre' });
+  } else {
+    pipeline = pipeline.trim();
+  }
+  const output_path = await saveSharpResult(pipeline, args.output_path, 'crop');
+  return { type: 'image', data: (await fs.readFile(output_path)).toString('base64'), mimeType: 'image/png', output_path };
+}
+
+async function backgroundRemoveImage(args) {
+  const { image } = await loadSharpInput(args.input_image);
+  const prepared = image.ensureAlpha();
+  const { data, info } = await prepared.raw().toBuffer({ resolveWithObject: true });
+  const alpha = Buffer.alloc(info.width * info.height);
+  for (let i = 0, p = 0; i < data.length; i += info.channels, p += 1) {
+    const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
+    alpha[p] = brightness > 245 ? 0 : 255;
+  }
+  const output_path = await saveSharpResult(
+    sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } }).joinChannel(alpha, {
+      raw: { width: info.width, height: info.height, channels: 1 }
+    }),
+    args.output_path,
+    'background-remove'
+  );
+  return { type: 'image', data: (await fs.readFile(output_path)).toString('base64'), mimeType: 'image/png', output_path };
+}
+
 async function generateImage(args) {
   const provider = providerFrom(args.provider);
   if (provider === 'kilo') return kiloImagesGenerations(args);
@@ -827,6 +917,49 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['prompt', 'input_image']
       }
+    },
+    {
+      name: 'background_remove',
+      description: 'Remove the background from an image and preserve transparency in the PNG output.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          input_image: { type: 'string' },
+          output_path: { type: 'string' }
+        },
+        required: ['input_image']
+      }
+    },
+    {
+      name: 'resize_image',
+      description: 'Resize an image locally with aspect-ratio-preserving defaults and PNG output.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          input_image: { type: 'string' },
+          output_path: { type: 'string' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          fit: { type: 'string', enum: PROCESSING_FITS },
+          background: { type: 'string' }
+        },
+        required: ['input_image']
+      }
+    },
+    {
+      name: 'auto_crop',
+      description: 'Crop an image locally to a target aspect or requested dimensions.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          input_image: { type: 'string' },
+          output_path: { type: 'string' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          gravity: { type: 'string' }
+        },
+        required: ['input_image']
+      }
     }
   ]
 }));
@@ -836,6 +969,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     if (name === 'kilo_generate_image' || name === 'edit_image') validateArgs(args);
     if (name === 'generate_image') validateArgs(args);
+    if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
     if (name === 'kilo_generate_image') {
       const result = await generateImage(args);
       return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
@@ -846,6 +980,18 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     if (name === 'edit_image') {
       const result = await editImage(args);
+      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+    }
+    if (name === 'background_remove') {
+      const result = await backgroundRemoveImage(args);
+      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+    }
+    if (name === 'resize_image') {
+      const result = await resizeImage(args);
+      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+    }
+    if (name === 'auto_crop') {
+      const result = await autoCropImage(args);
       return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
     }
     if (name === 'list_image_models') {
