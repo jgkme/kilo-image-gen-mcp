@@ -323,7 +323,7 @@ async function writeImageResult(result, outputPath) {
   await ensureDir(path.dirname(target));
   const decoded = result.data.startsWith('data:') ? mimeFromDataUrl(result.data) : { mimeType: result.mimeType || 'image/png', base64: result.data };
   await fs.writeFile(target, Buffer.from(decoded.base64, 'base64'));
-  return { ...result, mimeType: decoded.mimeType, output_path: target };
+  return { ...result, mimeType: decoded.mimeType, output_path: target, bytes: Buffer.byteLength(decoded.base64, 'base64') };
 }
 
 function uniqueOutputPath(outputPath, suffix) {
@@ -345,6 +345,11 @@ function imageTextResult(b64, outputPath) {
 
 function imageToolContent(result) {
   const mimeType = result.mimeType || 'image/png';
+  const lines = ['### Image saved', `- Path: \`${result.output_path || 'not saved to disk'}\``, `- MIME type: \`${mimeType}\``];
+  if (Number.isFinite(result.bytes)) lines.push(`- Size: \`${result.bytes} bytes\``);
+  if (result.provider) lines.push(`- Provider: \`${result.provider}\``);
+  if (result.model) lines.push(`- Model: \`${result.model}\``);
+  if (result.action) lines.push(`- Action: \`${result.action}\``);
   const content = [
     {
       type: 'resource_link',
@@ -355,7 +360,7 @@ function imageToolContent(result) {
   ];
   content.push({
     type: 'text',
-    text: JSON.stringify({ type: 'image', mimeType, output_path: result.output_path || undefined }, null, 2)
+    text: lines.join('\n')
   });
   return content;
 }
