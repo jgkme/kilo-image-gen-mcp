@@ -11,6 +11,7 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 const VERSION = '0.1.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
+const DEFAULT_OUTPUT_DIR = './generated-images';
 const DEFAULT_MODEL_BY_PROVIDER = {
   kilo: 'black-forest-labs/flux.2-pro',
   openrouter: 'black-forest-labs/flux.2-pro',
@@ -20,7 +21,20 @@ const DEFAULT_MODEL_BY_PROVIDER = {
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
 const KNOWN_MODELS = {
   kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
-  openrouter: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
+  openrouter: [
+    'black-forest-labs/flux.2-pro',
+    'black-forest-labs/flux.2-flex',
+    'google/gemini-2.5-flash-image',
+    'google/gemini-2.5-flash-image-preview',
+    'google/gemini-3-pro-image-preview',
+    'openai/gpt-5-image',
+    'openai/gpt-5-image-mini',
+    'sourceful/riverflow-v2-fast',
+    'sourceful/riverflow-v2-pro',
+    'sourceful/riverflow-v2.5-fast',
+    'sourceful/riverflow-v2.5-pro',
+    'recraft/recraft-v3'
+  ],
   openai: ['gpt-5-image', 'gpt-5-image-mini'],
   gemini: ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image']
 };
@@ -73,18 +87,41 @@ function requireProviderKey(provider) {
 }
 
 function validateStartup() {
-  const provider = providerFrom();
-  if (!providerKey(provider)) {
-    throw Object.assign(new Error(`Default provider ${provider} requires a configured API key`), {
+  const defaultProvider = providerFrom();
+  const configuredProviders = PROVIDERS.filter((provider) => Boolean(providerKey(provider)));
+
+  if (configuredProviders.length === 0) {
+    throw Object.assign(new Error('At least one provider API key must be configured'), {
       code: 'missing_api_key',
       retryable: false,
-      details: { provider }
+      details: { provider: defaultProvider }
     });
   }
 }
 
 function env(name) {
   return process.env[name] || '';
+}
+
+function outputDir() {
+  return env('IMAGE_MCP_OUTPUT_DIR').trim() || DEFAULT_OUTPUT_DIR;
+}
+
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+function mimeFromDataUrl(url) {
+  const match = String(url || '').match(/^data:([^;,]+)(?:;[^,]+)*;base64,(.+)$/i);
+  if (!match) return { mimeType: 'image/png', base64: undefined };
+  return { mimeType: match[1], base64: match[2] };
+}
+
+function normalizeBase64Payload(value) {
+  if (!value || typeof value !== 'string') return undefined;
+  if (value.startsWith('data:')) return mimeFromDataUrl(value).base64;
+  return value;
 }
 
 function providerFrom(value) {
@@ -137,7 +174,9 @@ async function readImageInput(input) {
   if (/^https?:\/\//.test(input) || input.startsWith('data:')) return input;
   const resolved = path.resolve(input);
   const buffer = await fs.readFile(resolved);
-  return `data:image/png;base64,${buffer.toString('base64')}`;
+  const ext = path.extname(resolved).toLowerCase();
+  const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/png';
+  return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
 async function readImageBuffer(input) {
@@ -161,6 +200,15 @@ async function writeImage(outputPath, b64) {
   return target;
 }
 
+async function writeImageResult(result, outputPath) {
+  if (!outputPath || !result?.data) return result;
+  await ensureDir(path.dirname(outputPath));
+  const target = path.resolve(outputPath);
+  const decoded = result.data.startsWith('data:') ? mimeFromDataUrl(result.data) : { mimeType: result.mimeType || 'image/png', base64: result.data };
+  await fs.writeFile(target, Buffer.from(decoded.base64, 'base64'));
+  return { ...result, mimeType: decoded.mimeType, output_path: target };
+}
+
 function imageTextResult(b64, outputPath) {
   return JSON.stringify({ type: 'image', data: b64, mimeType: 'image/png', output_path: outputPath || undefined }, null, 2);
 }
@@ -168,11 +216,61 @@ function imageTextResult(b64, outputPath) {
 function normalizeImagePart(part) {
   if (!part) return undefined;
   if (part.b64_json) return part.b64_json;
+  if (part.type === 'output_image' && part.image_url?.url) return part.image_url.url.split(',').pop();
   if (typeof part === 'string') return part.startsWith('data:') ? part.split(',').pop() : part;
   if (part.image_url?.url) return part.image_url.url.split(',').pop();
+  if (part.imageUrl?.url) return part.imageUrl.url.split(',').pop();
   if (part.url) return part.url.split(',').pop();
   if (part.data) return part.data;
+  if (part.result) return normalizeBase64Payload(part.result);
   return undefined;
+}
+
+function collectImageParts(node, results = []) {
+  if (!node) return results;
+  if (Array.isArray(node)) {
+    for (const entry of node) collectImageParts(entry, results);
+    return results;
+  }
+
+  const candidates = [
+    node,
+    node.message,
+    node.message?.content,
+    node.message?.images,
+    node.content,
+    node.images,
+    node.output,
+    node.data,
+    node.result
+  ];
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (Array.isArray(candidate)) {
+      for (const part of candidate) {
+        if (!part) continue;
+        const url = part?.image_url?.url || part?.imageUrl?.url || part?.url;
+        const data = normalizeBase64Payload(url) || normalizeBase64Payload(part?.data) || normalizeBase64Payload(part?.b64_json) || normalizeBase64Payload(part?.imageB64) || normalizeBase64Payload(part?.result);
+        if (data) results.push({ data, mimeType: part?.mime_type || part?.mimeType || mimeFromDataUrl(url || part?.data || '').mimeType });
+      }
+      continue;
+    }
+
+    const url = candidate?.image_url?.url || candidate?.imageUrl?.url || candidate?.url;
+    const data = normalizeBase64Payload(url) || normalizeBase64Payload(candidate?.data) || normalizeBase64Payload(candidate?.b64_json) || normalizeBase64Payload(candidate?.imageB64) || normalizeBase64Payload(candidate?.result);
+    if (data) results.push({ data, mimeType: candidate?.mime_type || candidate?.mimeType || mimeFromDataUrl(url || candidate?.data || '').mimeType });
+  }
+
+  return results;
+}
+
+function extractImagePayload(response) {
+  return collectImageParts(response)[0]?.data;
+}
+
+function extractImagePayloads(response) {
+  return collectImageParts(response);
 }
 
 function validateArgs(args) {
@@ -184,6 +282,18 @@ function validateArgs(args) {
   }
   if (args.size && typeof args.size !== 'string') {
     throw Object.assign(new Error('size must be a string like 1024x1024'), { code: 'validation_error', retryable: false });
+  }
+  if (args.input_images && !Array.isArray(args.input_images)) {
+    throw Object.assign(new Error('input_images must be an array of strings'), { code: 'validation_error', retryable: false });
+  }
+  if (args.modalities && !Array.isArray(args.modalities)) {
+    throw Object.assign(new Error('modalities must be an array of strings'), { code: 'validation_error', retryable: false });
+  }
+  if (args.quality && typeof args.quality !== 'string') {
+    throw Object.assign(new Error('quality must be a string'), { code: 'validation_error', retryable: false });
+  }
+  if (args.output_path && typeof args.output_path !== 'string') {
+    throw Object.assign(new Error('output_path must be a string'), { code: 'validation_error', retryable: false });
   }
 }
 
@@ -202,7 +312,41 @@ function errorResult(error) {
 }
 
 async function kiloImagesGenerations(args) {
-  return providerChatCompletion('kilo', args);
+  const prompt = promptWithAspect(args);
+  const image = await readImageInput(args.input_image);
+  const response = await axios.post(
+    'https://api.kilo.ai/api/gateway/chat/completions',
+    {
+      model: modelFor('kilo', args.model),
+      messages: [
+        {
+          role: 'user',
+          content: image
+            ? [
+                { type: 'text', text: prompt },
+                { type: 'image_url', image_url: { url: image } }
+              ]
+            : [{ type: 'text', text: prompt }]
+        }
+      ],
+      modalities: ['image', 'text']
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${requireProviderKey('kilo')}`,
+        'Content-Type': 'application/json',
+        'X-KiloCode-EditorName': 'Kilo CLI'
+      }
+    }
+  );
+
+  const content = response?.data?.choices?.[0]?.message?.content;
+  const parts = Array.isArray(content) ? content : content ? [content] : [];
+  const imagePart = parts.find((part) => part?.type === 'image_url' || part?.type === 'image' || part?.image_url || part?.url || part?.b64_json || part?.data);
+  const b64 = normalizeImagePart(imagePart);
+  if (!b64) throw Object.assign(new Error('Kilo image response did not include an image payload'), { retryable: false, response: response?.data });
+  const output_path = await writeImage(args.output_path, b64);
+  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
 
 async function kiloImageEdits(args) {
@@ -223,7 +367,7 @@ async function kiloImageEdits(args) {
   );
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.image?.b64_json;
-  if (!b64) throw Object.assign(new Error('Kilo edit response did not include image data'), { retryable: false });
+  if (!b64) throw Object.assign(new Error('Kilo edit response did not include image data'), { retryable: false, response: response?.data });
   const output_path = await writeImage(args.output_path, b64);
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
@@ -242,7 +386,7 @@ async function openaiImageEdits(args) {
   });
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
-  if (!b64) throw Object.assign(new Error('OpenAI edit response did not include image data'), { retryable: false });
+  if (!b64) throw Object.assign(new Error('OpenAI edit response did not include image data'), { retryable: false, response: response?.data });
   const output_path = await writeImage(args.output_path, b64);
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
@@ -265,13 +409,63 @@ async function openrouterImageEdits(args) {
   });
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
-  if (!b64) throw Object.assign(new Error('OpenRouter edit response did not include image data'), { retryable: false });
+  if (!b64) throw Object.assign(new Error('OpenRouter edit response did not include image data'), { retryable: false, response: response?.data });
   const output_path = await writeImage(args.output_path, b64);
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
 
 async function openrouterImagesGenerations(args) {
-  return providerChatCompletion('openrouter', args);
+  const prompt = promptWithAspect(args);
+  const image = await readImageInput(args.input_image);
+  const imageConfig = {
+    ...(args.aspect ? { aspect_ratio: args.aspect === 'square' ? '1:1' : args.aspect === 'landscape' ? '16:9' : '9:16' } : {}),
+    ...(args.size && args.size.includes('x') ? { size: args.size } : {}),
+    ...(args.quality ? { quality: args.quality } : {}),
+    ...(args.background ? { background: args.background } : {}),
+    ...(args.output_format ? { output_format: args.output_format } : {}),
+    ...(args.moderation ? { moderation: args.moderation } : {})
+  };
+
+  const response = await axios.post(
+    'https://openrouter.ai/api/v1/chat/completions',
+    {
+      model: modelFor('openrouter', args.model),
+      messages: [
+        {
+          role: 'user',
+          content: image
+            ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }]
+            : [{ type: 'text', text: prompt }]
+        }
+      ],
+      modalities: args.modalities && args.modalities.length ? args.modalities : ['image', 'text'],
+      ...(Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
+      ...(args.input_images?.length ? { input_images: args.input_images } : {}),
+      ...(args.max_tokens ? { max_tokens: args.max_tokens } : {})
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${requireProviderKey('openrouter')}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp',
+        'X-Title': '@jgkme/kilo-image-gen-mcp'
+      }
+    }
+  );
+
+  const payloads = extractImagePayloads(response?.data);
+  if (!payloads.length) {
+    throw Object.assign(new Error('openrouter chat response did not include an image payload'), { retryable: false, response: response?.data });
+  }
+
+  const images = [];
+  for (let index = 0; index < payloads.length; index += 1) {
+    const payload = payloads[index];
+    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, args.output_path ? args.output_path.replace(/\.png$/i, `-${index + 1}.png`) : undefined);
+    images.push(saved);
+  }
+
+  return images.length === 1 ? images[0] : { type: 'images', images };
 }
 
 async function providerChatCompletion(provider, args) {
@@ -310,13 +504,15 @@ async function providerChatCompletion(provider, args) {
     }
   );
 
-  const content = response?.data?.choices?.[0]?.message?.content;
-  const parts = Array.isArray(content) ? content : content ? [content] : [];
-  const imagePart = parts.find((part) => part?.type === 'image_url' || part?.type === 'image' || part?.image_url || part?.url || part?.b64_json || part?.data);
-  const b64 = normalizeImagePart(imagePart);
-  if (!b64) throw Object.assign(new Error(`${provider} chat response did not include an image payload`), { retryable: false });
-  const output_path = await writeImage(args.output_path, b64);
-  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+  const payloads = extractImagePayloads(response?.data);
+  if (!payloads.length) throw Object.assign(new Error(`${provider} chat response did not include an image payload`), { retryable: false, response: response?.data });
+  const images = [];
+  for (let index = 0; index < payloads.length; index += 1) {
+    const payload = payloads[index];
+    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, args.output_path ? args.output_path.replace(/\.png$/i, `-${index + 1}.png`) : undefined);
+    images.push(saved);
+  }
+  return images.length === 1 ? images[0] : { type: 'images', images };
 }
 
 async function providerEditImage(provider, args) {
@@ -338,12 +534,19 @@ async function listImageModels() {
   return {
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
     providers: {
-      kilo: { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations' },
-      openrouter: { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions' },
-      openai: { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions' },
-      gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions' }
+      kilo: { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations', generate: true, edit: true },
+      openrouter: { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions', generate: true, edit: true },
+      openai: { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions', generate: true, edit: true },
+      gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false }
     },
-    models: KNOWN_MODELS
+    models: KNOWN_MODELS,
+    outputDir: outputDir(),
+    openrouter: {
+      imageGeneration: {
+        modalities: ['image', 'text'],
+        imageConfig: ['aspect_ratio', 'size', 'quality', 'background', 'output_format', 'moderation']
+      }
+    }
   };
 }
 
@@ -364,6 +567,13 @@ async function getProviderStatus() {
     version: VERSION,
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
     configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])),
+    capabilities: {
+      openrouter: {
+        chat_image_generation: true,
+        output_modalities: ['image', 'text'],
+        response_shapes: ['choices[0].message.images', 'choices[0].message.content', 'data.output', 'data']
+      }
+    },
     runtime: {
       defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined,
       defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined
@@ -389,6 +599,33 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] },
           steps: { type: 'number' },
           input_image: { type: 'string' },
+          output_path: { type: 'string' }
+        },
+        required: ['prompt']
+      }
+    },
+    {
+      name: 'generate_image',
+      description: 'Generate images using the selected provider. OpenRouter requests default to chat-completions with modalities and response normalization, including multiple image payloads when present.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string' },
+          provider: { type: 'string', enum: PROVIDERS },
+          model: { type: 'string' },
+          size: { type: 'string' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] },
+          steps: { type: 'number' },
+          input_image: { type: 'string' },
+          input_images: { type: 'array', items: { type: 'string' } },
+          modalities: { type: 'array', items: { type: 'string' } },
+          quality: { type: 'string' },
+          background: { type: 'string' },
+          output_format: { type: 'string' },
+          moderation: { type: 'string' },
+          max_tokens: { type: 'number' },
           output_path: { type: 'string' }
         },
         required: ['prompt']
@@ -432,9 +669,14 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
   try {
     if (name === 'kilo_generate_image' || name === 'edit_image') validateArgs(args);
+    if (name === 'generate_image') validateArgs(args);
     if (name === 'kilo_generate_image') {
       const result = await generateImage(args);
       return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+    }
+    if (name === 'generate_image') {
+      const result = await generateImage(args);
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
     }
     if (name === 'edit_image') {
       const result = await editImage(args);

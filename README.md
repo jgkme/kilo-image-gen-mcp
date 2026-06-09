@@ -46,6 +46,26 @@ Default model notes:
 | `input_image` | string | Path, base64, or URL |
 | `output_path` | string | Optional output file |
 
+### `generate_image`
+
+OpenRouter-first image generation tool with broader request options and response normalization.
+
+| Input | Type | Notes |
+|---|---|---|
+| `prompt` | string | Required |
+| `provider` | string | Defaults to `openrouter` if omitted |
+| `model` | string | Optional |
+| `input_image` | string | Optional reference image |
+| `input_images` | string[] | Optional reference image list for OpenRouter chat-image models |
+| `modalities` | string[] | Optional override, defaults to `['image', 'text']` for OpenRouter |
+| `quality` | string | Optional OpenRouter image_config hint |
+| `background` | string | Optional OpenRouter image_config hint |
+| `output_format` | string | Optional OpenRouter image_config hint |
+| `moderation` | string | Optional OpenRouter image_config hint |
+| `output_path` | string | Optional output file path |
+
+OpenRouter responses are normalized from `choices[0].message.images`, `message.content`, `data.output`, and other common image payload shapes. Multiple returned images are preserved.
+
 ### `list_image_models`
 
 Returns configured provider status, current defaults, and known model families.
@@ -65,6 +85,7 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
 - `aspect` maps to size when width and height are not provided
 - `input_image` can be a file path, base64 string, or URL
 - `output_path` writes the generated PNG to disk
+- `generate_image` supports OpenRouter response normalization and multiple image payloads when present
 - `edit_image` treats `input_image` as the reference image and preserves subject/composition unless instructed otherwise
 - `edit_image` uses native edit endpoints for Kilo, OpenAI, and OpenRouter when possible
 
