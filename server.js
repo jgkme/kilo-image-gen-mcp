@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import FormData from 'form-data';
 import axios from 'axios';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -11,6 +12,19 @@ const VERSION = '0.1.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
+const KNOWN_MODELS = {
+  kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
+  openrouter: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
+  openai: ['gpt-5-image', 'gpt-5-image-mini'],
+  gemini: ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image']
+};
+
+const EDIT_CAPABILITIES = {
+  kilo: true,
+  openrouter: true,
+  openai: true,
+  gemini: false
+};
 
 const server = new Server(
   { name: '@jgkme/kilo-image-gen-mcp', version: VERSION },
@@ -72,6 +86,20 @@ async function readImageInput(input) {
   return `data:image/png;base64,${buffer.toString('base64')}`;
 }
 
+async function readImageBuffer(input) {
+  if (!input) return undefined;
+  if (input.startsWith('data:')) {
+    const base64 = input.split(',').pop() || '';
+    return Buffer.from(base64, 'base64');
+  }
+  if (/^https?:\/\//.test(input)) {
+    const response = await axios.get(input, { responseType: 'arraybuffer' });
+    return Buffer.from(response.data);
+  }
+  const resolved = path.resolve(input);
+  return fs.readFile(resolved);
+}
+
 async function writeImage(outputPath, b64) {
   if (!outputPath) return undefined;
   const target = path.resolve(outputPath);
@@ -81,6 +109,28 @@ async function writeImage(outputPath, b64) {
 
 function imageTextResult(b64, outputPath) {
   return JSON.stringify({ type: 'image', data: b64, mimeType: 'image/png', output_path: outputPath || undefined }, null, 2);
+}
+
+function normalizeImagePart(part) {
+  if (!part) return undefined;
+  if (part.b64_json) return part.b64_json;
+  if (typeof part === 'string') return part.startsWith('data:') ? part.split(',').pop() : part;
+  if (part.image_url?.url) return part.image_url.url.split(',').pop();
+  if (part.url) return part.url.split(',').pop();
+  if (part.data) return part.data;
+  return undefined;
+}
+
+function validateArgs(args) {
+  if (!args.prompt || typeof args.prompt !== 'string') {
+    throw Object.assign(new Error('prompt is required'), { code: 'validation_error', retryable: false });
+  }
+  if (args.aspect && !['square', 'landscape', 'portrait'].includes(args.aspect)) {
+    throw Object.assign(new Error('aspect must be square, landscape, or portrait'), { code: 'validation_error', retryable: false });
+  }
+  if (args.size && typeof args.size !== 'string') {
+    throw Object.assign(new Error('size must be a string like 1024x1024'), { code: 'validation_error', retryable: false });
+  }
 }
 
 function errorResult(error) {
@@ -114,6 +164,70 @@ async function kiloImagesGenerations(args) {
 
   const b64 = response?.data?.data?.[0]?.b64_json;
   if (!b64) throw Object.assign(new Error('Kilo image response did not include data[0].b64_json'), { retryable: false });
+  const output_path = await writeImage(args.output_path, b64);
+  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+}
+
+async function kiloImageEdits(args) {
+  const { width, height } = dimensions(args);
+  const image = await readImageInput(args.reference_image || args.input_image);
+  const response = await axios.post(
+    'https://api.kilo.ai/api/gateway/images/edits',
+    {
+      model: modelFor('kilo', args.model),
+      prompt: promptWithAspect(args),
+      width,
+      height,
+      ...(args.steps ? { steps: args.steps } : {}),
+      input_image: image
+    },
+    { headers: { Authorization: `Bearer ${env('KILO_API_KEY')}`, 'Content-Type': 'application/json' } }
+  );
+
+  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.image?.b64_json;
+  if (!b64) throw Object.assign(new Error('Kilo edit response did not include image data'), { retryable: false });
+  const output_path = await writeImage(args.output_path, b64);
+  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+}
+
+async function openaiImageEdits(args) {
+  const image = await readImageBuffer(args.reference_image || args.input_image);
+  const form = new FormData();
+  form.append('model', modelFor('openai', args.model));
+  form.append('prompt', promptWithAspect(args));
+  form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
+  if (args.output_path) form.append('response_format', 'b64_json');
+  if (args.size || args.width || args.height) form.append('size', `${dimensions(args).width}x${dimensions(args).height}`);
+
+  const response = await axios.post('https://api.openai.com/v1/images/edits', form, {
+    headers: { Authorization: `Bearer ${env('OPENAI_API_KEY')}`, ...form.getHeaders() }
+  });
+
+  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
+  if (!b64) throw Object.assign(new Error('OpenAI edit response did not include image data'), { retryable: false });
+  const output_path = await writeImage(args.output_path, b64);
+  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+}
+
+async function openrouterImageEdits(args) {
+  const image = await readImageBuffer(args.reference_image || args.input_image);
+  const form = new FormData();
+  form.append('model', modelFor('openrouter', args.model));
+  form.append('prompt', promptWithAspect(args));
+  form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
+  if (args.size || args.width || args.height) form.append('size', `${dimensions(args).width}x${dimensions(args).height}`);
+
+  const response = await axios.post('https://openrouter.ai/api/v1/images/edits', form, {
+    headers: {
+      Authorization: `Bearer ${env('OPENROUTER_API_KEY')}`,
+      'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp',
+      'X-Title': '@jgkme/kilo-image-gen-mcp',
+      ...form.getHeaders()
+    }
+  });
+
+  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
+  if (!b64) throw Object.assign(new Error('OpenRouter edit response did not include image data'), { retryable: false });
   const output_path = await writeImage(args.output_path, b64);
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
@@ -158,11 +272,19 @@ async function providerChatCompletion(provider, args) {
 
   const content = response?.data?.choices?.[0]?.message?.content;
   const parts = Array.isArray(content) ? content : content ? [content] : [];
-  const imagePart = parts.find((part) => part?.type === 'image_url' || part?.type === 'image' || part?.image_url || part?.url || part?.b64_json);
-  const b64 = imagePart?.b64_json || imagePart?.image_url?.url?.split(',').pop() || imagePart?.url?.split(',').pop();
+  const imagePart = parts.find((part) => part?.type === 'image_url' || part?.type === 'image' || part?.image_url || part?.url || part?.b64_json || part?.data);
+  const b64 = normalizeImagePart(imagePart);
   if (!b64) throw Object.assign(new Error(`${provider} chat response did not include an image payload`), { retryable: false });
   const output_path = await writeImage(args.output_path, b64);
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+}
+
+async function providerEditImage(provider, args) {
+  return providerChatCompletion(provider, {
+    ...args,
+    input_image: args.reference_image || args.input_image,
+    prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`
+  });
 }
 
 async function generateImage(args) {
@@ -180,13 +302,20 @@ async function listImageModels() {
       openai: { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions' },
       gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions' }
     },
-    models: {
-      kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
-      openrouter: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
-      openai: ['gpt-5-image', 'gpt-5-image-mini'],
-      gemini: ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image']
-    }
+    models: KNOWN_MODELS
   };
+}
+
+async function editImage(args) {
+  const provider = providerFrom(args.provider);
+  if (provider === 'kilo' && EDIT_CAPABILITIES.kilo) return kiloImageEdits(args);
+  if (provider === 'openai' && EDIT_CAPABILITIES.openai) return openaiImageEdits(args);
+  if (provider === 'openrouter' && EDIT_CAPABILITIES.openrouter) return openrouterImageEdits(args);
+  return providerChatCompletion(provider, {
+    ...args,
+    input_image: args.reference_image || args.input_image,
+    prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`
+  });
 }
 
 async function getProviderStatus() {
@@ -221,13 +350,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'list_image_models',
-      description: 'List available providers, defaults, and model families.',
+      description: 'List available providers, defaults, model families, and edit capability.',
       inputSchema: { type: 'object', properties: {} }
     },
     {
       name: 'get_provider_status',
       description: 'Report configured providers and defaults.',
       inputSchema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'edit_image',
+      description: 'Edit an image using a reference image and prompt.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          prompt: { type: 'string' },
+          provider: { type: 'string', enum: PROVIDERS },
+          model: { type: 'string' },
+          size: { type: 'string' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] },
+          steps: { type: 'number' },
+          input_image: { type: 'string' },
+          reference_image: { type: 'string' },
+          output_path: { type: 'string' }
+        },
+        required: ['prompt', 'input_image']
+      }
     }
   ]
 }));
@@ -235,8 +385,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
   try {
+    if (name === 'kilo_generate_image' || name === 'edit_image') validateArgs(args);
     if (name === 'kilo_generate_image') {
       const result = await generateImage(args);
+      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+    }
+    if (name === 'edit_image') {
+      const result = await editImage(args);
       return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
     }
     if (name === 'list_image_models') {

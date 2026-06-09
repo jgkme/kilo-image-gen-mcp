@@ -39,11 +39,15 @@ Provider environment variables:
 
 ### `list_image_models`
 
-Returns configured provider status and current defaults.
+Returns configured provider status, current defaults, and known model families.
 
 ### `get_provider_status`
 
 Returns configured providers and defaults.
+
+### `edit_image`
+
+Same shape as `kilo_generate_image`, but requires `input_image` and routes the prompt as an edit instruction. Native edit routes are used for Kilo, OpenAI, and OpenRouter when available, with chat-based fallback for other providers.
 
 ## Behavior
 
@@ -51,6 +55,8 @@ Returns configured providers and defaults.
 - `aspect` maps to size when width and height are not provided
 - `input_image` can be a file path, base64 string, or URL
 - `output_path` writes the generated PNG to disk
+- `edit_image` treats `input_image` as the reference image and preserves subject/composition unless instructed otherwise
+- `edit_image` uses native edit endpoints for Kilo, OpenAI, and OpenRouter when possible
 
 ## Provider notes
 
@@ -64,6 +70,27 @@ Returns configured providers and defaults.
 {
   "mcp": {
   "kilo-image-gen": {
+      "type": "local",
+      "command": ["npx", "-y", "@jgkme/kilo-image-gen-mcp"],
+      "env": {
+        "IMAGE_MCP_DEFAULT_PROVIDER": "kilo",
+        "KILO_API_KEY": "your_kilo_api_key_here",
+        "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
+        "OPENAI_API_KEY": "your_openai_api_key_here",
+        "GEMINI_API_KEY": "your_gemini_api_key_here"
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+For a local install path, use:
+
+```json
+{
+  "mcp": {
+    "kilo-image-gen": {
       "type": "local",
       "command": ["npx", "-y", "@jgkme/kilo-image-gen-mcp"],
       "env": {
