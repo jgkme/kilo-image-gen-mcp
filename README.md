@@ -2,6 +2,18 @@
 
 MCP server for image generation through Kilo Gateway and compatible providers.
 
+## Features
+
+- `generate_image` for OpenRouter-first generation with response normalization
+- `kilo_generate_image` for Kilo Gateway routing
+- `edit_image` for prompt-driven image editing
+- `background_remove` for local segmentation-backed transparent PNG cutouts
+- `resize_image` and `auto_crop` for deterministic local transforms
+- Support for OpenAI `gpt-image-1`
+- Gemini support for `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, and `gemini-3-pro-image-preview`
+- Global Kilo skills for generation, editing, background removal, and transforms
+- Reusable smoke validation commands for OpenRouter, OpenAI, and local background removal
+
 ## Install
 
 ```bash
@@ -74,7 +86,7 @@ OpenRouter responses are normalized from `choices[0].message.images`, `message.c
 Project output hint:
 
 - If `IMAGE_MCP_PROJECT_OUTPUT_DIR` is set, the server writes generated images there.
-- Otherwise, if the repo root contains `.image-mcp-output`, `.image-mcp-output.json`, or `.kilo-image-output`, that value is used.
+- Otherwise, if the repo root contains `.image-mcp-output` or `.image-mcp-output.json`, that value is used.
 - This is intended for project-specific layouts like Laravel `public/storage/images` without hardcoding framework detection.
 
 Example hint file contents:
