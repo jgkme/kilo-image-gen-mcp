@@ -95,11 +95,18 @@ function validateStartup() {
   const configuredProviders = PROVIDERS.filter((provider) => Boolean(providerKey(provider)));
 
   if (configuredProviders.length === 0) {
-    throw Object.assign(new Error('At least one provider API key must be configured'), {
-      code: 'missing_api_key',
-      retryable: false,
-      details: { provider: defaultProvider }
-    });
+    process.stderr.write(
+      JSON.stringify(
+        {
+          code: 'missing_api_key',
+          message: 'No provider API key is visible at startup; provider-specific tools will fail until one is injected.',
+          details: { provider: defaultProvider },
+          retryable: false
+        },
+        null,
+        2
+      ) + '\n'
+    );
   }
 }
 
@@ -107,9 +114,14 @@ function env(name) {
   return process.env[name] || '';
 }
 
+let _cachedHintedOutputDir = null;
+
+async function resolveOutputDirHint() {
+  _cachedHintedOutputDir = await projectOutputDirFromHint();
+}
+
 function outputDir() {
-  const hinted = projectOutputDirFromHint();
-  if (hinted) return hinted;
+  if (_cachedHintedOutputDir) return _cachedHintedOutputDir;
   const configured = env('IMAGE_MCP_OUTPUT_DIR').trim();
   if (configured) return path.resolve(configured);
   return path.resolve(process.cwd(), DEFAULT_OUTPUT_DIR);
@@ -260,10 +272,17 @@ async function writeImage(outputPath, b64) {
   return target;
 }
 
+function normalizeOutputPath(outputPath, fallbackPrefix) {
+  if (outputPath && typeof outputPath === 'string' && outputPath.trim()) {
+    return path.resolve(process.cwd(), outputPath);
+  }
+  return path.join(process.cwd(), DEFAULT_OUTPUT_DIR, outputFileName(fallbackPrefix));
+}
+
 async function writeImageResult(result, outputPath) {
   if (!result?.data) return result;
   const baseDir = await ensureOutputDir();
-  const target = outputPath ? path.resolve(process.cwd(), outputPath) : path.join(baseDir, outputFileName('image'));
+  const target = outputPath ? normalizeOutputPath(outputPath, 'image') : path.join(baseDir, outputFileName('image'));
   await ensureDir(path.dirname(target));
   const decoded = result.data.startsWith('data:') ? mimeFromDataUrl(result.data) : { mimeType: result.mimeType || 'image/png', base64: result.data };
   await fs.writeFile(target, Buffer.from(decoded.base64, 'base64'));
@@ -272,7 +291,7 @@ async function writeImageResult(result, outputPath) {
 
 function uniqueOutputPath(outputPath, suffix) {
   if (!outputPath) return undefined;
-  const resolved = path.resolve(process.cwd(), outputPath);
+  const resolved = normalizeOutputPath(outputPath, 'image');
   const ext = path.extname(resolved);
   const base = resolved.slice(0, resolved.length - ext.length);
   return `${base}${suffix}${ext || '.png'}`;
@@ -285,6 +304,10 @@ function outputFileName(prefix = 'image') {
 
 function imageTextResult(b64, outputPath) {
   return JSON.stringify({ type: 'image', data: b64, mimeType: 'image/png', output_path: outputPath || undefined }, null, 2);
+}
+
+function defaultSavedImagePath(prefix = 'image') {
+  return path.join(outputDir(), outputFileName(prefix));
 }
 
 function normalizeImagePart(part) {
@@ -459,7 +482,7 @@ async function kiloImagesGenerations(args) {
   const imagePart = parts.find((part) => part?.type === 'image_url' || part?.type === 'image' || part?.image_url || part?.url || part?.b64_json || part?.data);
   const b64 = normalizeImagePart(imagePart);
   if (!b64) throw Object.assign(new Error('Kilo image response did not include an image payload'), { retryable: false, response: response?.data });
-  const output_path = await writeImage(args.output_path, b64);
+  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
 
@@ -482,7 +505,7 @@ async function kiloImageEdits(args) {
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.image?.b64_json;
   if (!b64) throw Object.assign(new Error('Kilo edit response did not include image data'), { retryable: false, response: response?.data });
-  const output_path = await writeImage(args.output_path, b64);
+  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
 
@@ -501,7 +524,7 @@ async function openaiImageEdits(args) {
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
   if (!b64) throw Object.assign(new Error('OpenAI edit response did not include image data'), { retryable: false, response: response?.data });
-  const output_path = await writeImage(args.output_path, b64);
+  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
 
@@ -524,7 +547,7 @@ async function openrouterImageEdits(args) {
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
   if (!b64) throw Object.assign(new Error('OpenRouter edit response did not include image data'), { retryable: false, response: response?.data });
-  const output_path = await writeImage(args.output_path, b64);
+  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
 
@@ -576,8 +599,12 @@ async function openrouterImagesGenerations(args) {
   const images = [];
   for (let index = 0; index < payloads.length; index += 1) {
     const payload = payloads[index];
-    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, args.output_path ? args.output_path.replace(/\.png$/i, `-${index + 1}.png`) : undefined);
-    images.push(saved);
+    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
+    if (args.output_path) {
+      images.push(await writeImageResult(image, index === 0 ? args.output_path : `${args.output_path.replace(/\.png$/i, '')}-${index + 1}.png`));
+    } else {
+      images.push(await writeImageResult(image, defaultSavedImagePath(`openrouter-${index + 1}`)));
+    }
   }
 
   return images.length === 1 ? images[0] : { type: 'images', images };
@@ -610,8 +637,12 @@ async function openaiImageGenerations(args) {
   const images = [];
   for (let index = 0; index < payloads.length; index += 1) {
     const payload = payloads[index];
-    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, uniqueOutputPath(args.output_path, `-${index + 1}`));
-    images.push(saved);
+    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
+    if (args.output_path) {
+      images.push(await writeImageResult(image, uniqueOutputPath(args.output_path, `-${index + 1}`)));
+    } else {
+      images.push(await writeImageResult(image, defaultSavedImagePath(`openai-${index + 1}`)));
+    }
   }
 
   return images.length === 1 ? images[0] : { type: 'images', images };
@@ -649,8 +680,12 @@ async function geminiImageGenerations(args) {
   const images = [];
   for (let index = 0; index < payloads.length; index += 1) {
     const payload = payloads[index];
-    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, uniqueOutputPath(args.output_path, `-${index + 1}`));
-    images.push(saved);
+    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
+    if (args.output_path) {
+      images.push(await writeImageResult(image, uniqueOutputPath(args.output_path, `-${index + 1}`)));
+    } else {
+      images.push(await writeImageResult(image, defaultSavedImagePath(`gemini-${index + 1}`)));
+    }
   }
 
   return images.length === 1 ? images[0] : { type: 'images', images };
@@ -697,8 +732,12 @@ async function providerChatCompletion(provider, args) {
   const images = [];
   for (let index = 0; index < payloads.length; index += 1) {
     const payload = payloads[index];
-    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, args.output_path ? args.output_path.replace(/\.png$/i, `-${index + 1}.png`) : undefined);
-    images.push(saved);
+    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
+    if (args.output_path) {
+      images.push(await writeImageResult(image, `${args.output_path.replace(/\.png$/i, '')}-${index + 1}.png`));
+    } else {
+      images.push(await writeImageResult(image, defaultSavedImagePath(`chat-${index + 1}`)));
+    }
   }
   return images.length === 1 ? images[0] : { type: 'images', images };
 }
@@ -720,7 +759,7 @@ async function loadSharpInput(input) {
 
 async function saveSharpResult(image, outputPath, fallbackPrefix) {
   const baseDir = await ensureOutputDir();
-  const target = outputPath ? path.resolve(process.cwd(), outputPath) : path.join(baseDir, outputFileName(fallbackPrefix));
+  const target = outputPath ? normalizeOutputPath(outputPath, fallbackPrefix) : path.join(baseDir, outputFileName(fallbackPrefix));
   await ensureDir(path.dirname(target));
   const buffer = await image.png().toBuffer();
   await fs.writeFile(target, buffer);
@@ -784,7 +823,6 @@ async function generateImage(args) {
 }
 
 async function listImageModels() {
-  const hintedOutputDir = await projectOutputDirFromHint();
   return {
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
     providers: {
@@ -794,7 +832,7 @@ async function listImageModels() {
       gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false }
     },
     models: KNOWN_MODELS,
-    outputDir: hintedOutputDir || outputDir(),
+    outputDir: outputDir(),
     openrouter: {
       imageGeneration: {
         modalities: ['image', 'text', 'image-only'],
@@ -817,7 +855,6 @@ async function editImage(args) {
 }
 
 async function getProviderStatus() {
-  const hintedOutputDir = await projectOutputDirFromHint();
   return {
     version: VERSION,
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
@@ -832,7 +869,7 @@ async function getProviderStatus() {
     runtime: {
       defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined,
       defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined,
-      outputDir: hintedOutputDir || outputDir()
+      outputDir: outputDir()
     }
   };
 }
@@ -976,7 +1013,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     if (name === 'generate_image') {
       const result = await generateImage(args);
-      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
     }
     if (name === 'edit_image') {
       const result = await editImage(args);
@@ -1007,6 +1044,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 });
 
 try {
+  await resolveOutputDirHint();
   validateStartup();
   process.stderr.write(`@jgkme/kilo-image-gen-mcp v${VERSION} starting\n`);
   await server.connect(new StdioServerTransport());
