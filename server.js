@@ -358,7 +358,11 @@ async function getProviderStatus() {
   return {
     version: VERSION,
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
-    configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)]))
+    configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])),
+    runtime: {
+      defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined,
+      defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined
+    }
   };
 }
 
