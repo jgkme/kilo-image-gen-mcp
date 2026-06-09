@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import FormData from 'form-data';
 import axios from 'axios';
 import sharp from 'sharp';
+import { rmbg, createBriaaiModel, createModnetModel, createU2netpModel } from 'rmbg';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
@@ -20,6 +21,7 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   openai: 'gpt-5-image',
   gemini: 'gemini-2.5-flash-image'
 };
+const BACKGROUND_REMOVE_MODELS = ['u2netp', 'modnet', 'briaai'];
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
 const KNOWN_MODELS = {
   kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
@@ -442,6 +444,18 @@ function validateProcessingArgs(args) {
   if (args.fit && !PROCESSING_FITS.includes(args.fit)) {
     throw Object.assign(new Error(`fit must be one of ${PROCESSING_FITS.join(', ')}`), { code: 'validation_error', retryable: false });
   }
+  if (args.model && typeof args.model !== 'string') {
+    throw Object.assign(new Error('model must be a string'), { code: 'validation_error', retryable: false });
+  }
+  if (args.model && !BACKGROUND_REMOVE_MODELS.includes(String(args.model).toLowerCase())) {
+    throw Object.assign(new Error(`model must be one of ${BACKGROUND_REMOVE_MODELS.join(', ')}`), { code: 'validation_error', retryable: false });
+  }
+  if (args.max_resolution !== undefined && !Number.isFinite(args.max_resolution)) {
+    throw Object.assign(new Error('max_resolution must be a number'), { code: 'validation_error', retryable: false });
+  }
+  if (args.max_resolution !== undefined && args.max_resolution <= 0) {
+    throw Object.assign(new Error('max_resolution must be greater than 0'), { code: 'validation_error', retryable: false });
+  }
 }
 
 function errorResult(error) {
@@ -805,22 +819,19 @@ async function autoCropImage(args) {
 }
 
 async function backgroundRemoveImage(args) {
-  const { image } = await loadSharpInput(args.input_image);
-  const prepared = image.ensureAlpha();
-  const { data, info } = await prepared.raw().toBuffer({ resolveWithObject: true });
-  const alpha = Buffer.alloc(info.width * info.height);
-  for (let i = 0, p = 0; i < data.length; i += info.channels, p += 1) {
-    const brightness = (data[i] + data[i + 1] + data[i + 2]) / 3;
-    alpha[p] = brightness > 245 ? 0 : 255;
-  }
-  const output_path = await saveSharpResult(
-    sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } }).joinChannel(alpha, {
-      raw: { width: info.width, height: info.height, channels: 1 }
-    }),
-    args.output_path,
-    'background-remove'
-  );
-  return { type: 'image', data: (await fs.readFile(output_path)).toString('base64'), mimeType: 'image/png', output_path };
+  const modelName = String(args.model || 'modnet').toLowerCase();
+  const model = modelName === 'briaai' ? createBriaaiModel() : modelName === 'u2netp' ? createU2netpModel() : createModnetModel();
+  const input = await readImageBuffer(args.input_image);
+  const outputBuffer = await rmbg(input, {
+    model,
+    maxResolution: Math.max(1, Number(args.max_resolution) || 2048),
+    cacheDir: path.join(process.cwd(), '.cache', 'rmbg'),
+    enableCache: true
+  });
+  const output_path = args.output_path ? normalizeOutputPath(args.output_path, 'background-remove') : path.join(outputDir(), outputFileName('background-remove'));
+  await ensureDir(path.dirname(output_path));
+  await fs.writeFile(output_path, outputBuffer);
+  return { type: 'image', data: outputBuffer.toString('base64'), mimeType: 'image/png', output_path };
 }
 
 async function generateImage(args) {
@@ -967,11 +978,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'background_remove',
-      description: 'Remove the background from an image and preserve transparency in the PNG output.',
+      description: 'Remove the background from an image with a local segmentation model and preserve transparency in the PNG output.',
       inputSchema: {
         type: 'object',
         properties: {
           input_image: { type: 'string' },
+          model: { type: 'string', enum: BACKGROUND_REMOVE_MODELS },
+          max_resolution: { type: 'number' },
           output_path: { type: 'string' }
         },
         required: ['input_image']

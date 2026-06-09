@@ -99,11 +99,13 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
 
 ### `background_remove`
 
-Locally removes a simple background and preserves transparency in a PNG output.
+Locally removes a background with a segmentation model and preserves transparency in a PNG output.
 
 | Input | Type | Notes |
 |---|---|---|
 | `input_image` | string | Required |
+| `model` | string | Optional. `u2netp`, `modnet`, or `briaai` |
+| `max_resolution` | number | Optional. Defaults to `2048` |
 | `output_path` | string | Optional output file path |
 
 ### `resize_image`
@@ -140,6 +142,7 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 - `edit_image` treats `input_image` as the reference image and preserves subject/composition unless instructed otherwise
 - `edit_image` uses native edit endpoints for Kilo, OpenAI, and OpenRouter when possible
 - `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
+- `background_remove` uses a local `rmbg` segmentation model and supports `u2netp`, `modnet`, and `briaai`
 
 ## Provider notes
 
