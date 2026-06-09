@@ -111,7 +111,9 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
 ## Provider notes
 
 - `kilo` uses `https://api.kilo.ai/api/gateway/images/generations`
-- `openrouter`, `openai`, and `gemini` use chat-completions image flows when available
+- `openrouter` supports many image models, but not every model supports every modality combination. The server adapts the request shape per model and falls back to image-only when needed.
+- `openai` uses the Images API for generation and the Images API for edits
+- `gemini` uses the OpenAI-compatible Gemini endpoint for generation and chat-style image flows where supported
 - Errors return structured JSON text with `code`, `message`, `details`, and `retryable`
 - For Kilo/OpenRouter, you can pick a different compatible model by setting `model` explicitly or by changing `IMAGE_MCP_DEFAULT_MODEL`
 - In live Kilo runtime tests, the MCP can receive a non-empty `KILO_API_KEY`, but the Kilo image gateway still responds with `Please pass a valid API key` / `PAID_MODEL_AUTH_REQUIRED` for image generation requests. That indicates the backend is rejecting the token at the image endpoint, not that the MCP is dropping the key.

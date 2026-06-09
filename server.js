@@ -267,6 +267,14 @@ async function writeImageResult(result, outputPath) {
   return { ...result, mimeType: decoded.mimeType, output_path: target };
 }
 
+function uniqueOutputPath(outputPath, suffix) {
+  if (!outputPath) return undefined;
+  const resolved = path.resolve(process.cwd(), outputPath);
+  const ext = path.extname(resolved);
+  const base = resolved.slice(0, resolved.length - ext.length);
+  return `${base}${suffix}${ext || '.png'}`;
+}
+
 function outputFileName(prefix = 'image') {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return `${prefix}-${stamp}.png`;
@@ -548,6 +556,79 @@ async function openrouterImagesGenerations(args) {
   return images.length === 1 ? images[0] : { type: 'images', images };
 }
 
+async function openaiImageGenerations(args) {
+  const image = await readImageInput(args.input_image);
+  const prompt = promptWithAspect(args);
+  const response = await axios.post(
+    'https://api.openai.com/v1/images/generations',
+    {
+      model: modelFor('openai', args.model),
+      prompt,
+      size: args.size || '1024x1024',
+      ...(args.quality ? { quality: args.quality } : {}),
+      ...(args.output_format ? { response_format: 'b64_json' } : {}),
+      ...(image ? { input_image: image } : {})
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${requireProviderKey('openai')}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+
+  const payloads = extractImagePayloads(response?.data);
+  if (!payloads.length) throw Object.assign(new Error('OpenAI image response did not include an image payload'), { retryable: false, response: response?.data });
+
+  const images = [];
+  for (let index = 0; index < payloads.length; index += 1) {
+    const payload = payloads[index];
+    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, uniqueOutputPath(args.output_path, `-${index + 1}`));
+    images.push(saved);
+  }
+
+  return images.length === 1 ? images[0] : { type: 'images', images };
+}
+
+async function geminiImageGenerations(args) {
+  const image = await readImageInput(args.input_image);
+  const prompt = promptWithAspect(args);
+  const response = await axios.post(
+    'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    {
+      model: modelFor('gemini', args.model),
+      messages: [
+        {
+          role: 'user',
+          content: image
+            ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }]
+            : [{ type: 'text', text: prompt }]
+        }
+      ],
+      modalities: modalitiesForModel('gemini', modelFor('gemini', args.model), args.modalities),
+      ...(args.max_tokens ? { max_tokens: args.max_tokens } : {})
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${requireProviderKey('gemini')}`,
+        'Content-Type': 'application/json'
+      }
+    }
+  );
+
+  const payloads = extractImagePayloads(response?.data);
+  if (!payloads.length) throw Object.assign(new Error('Gemini image response did not include an image payload'), { retryable: false, response: response?.data });
+
+  const images = [];
+  for (let index = 0; index < payloads.length; index += 1) {
+    const payload = payloads[index];
+    const saved = await writeImageResult({ type: 'image', data: payload.data, mimeType: payload.mimeType }, uniqueOutputPath(args.output_path, `-${index + 1}`));
+    images.push(saved);
+  }
+
+  return images.length === 1 ? images[0] : { type: 'images', images };
+}
+
 async function providerChatCompletion(provider, args) {
   const prompt = promptWithAspect(args);
   const image = await readImageInput(args.input_image);
@@ -573,7 +654,7 @@ async function providerChatCompletion(provider, args) {
     {
       model: modelFor(provider, args.model),
       messages,
-      modalities: provider === 'openrouter' ? ['image', 'text'] : ['image', 'text']
+      modalities: ['image', 'text']
     },
     {
       headers: {
@@ -607,6 +688,8 @@ async function generateImage(args) {
   const provider = providerFrom(args.provider);
   if (provider === 'kilo') return kiloImagesGenerations(args);
   if (provider === 'openrouter') return openrouterImagesGenerations(args);
+  if (provider === 'openai') return openaiImageGenerations(args);
+  if (provider === 'gemini') return geminiImageGenerations(args);
   return providerChatCompletion(provider, args);
 }
 
