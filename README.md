@@ -14,6 +14,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - Global Kilo skills for generation, editing, background removal, and transforms
 - Reusable smoke validation commands for OpenRouter, OpenAI, and local background removal
 - Debug mode via `IMAGE_MCP_DEBUG=1` for full error details and response payloads
+- `background_remove`, `resize_image`, and `auto_crop` work without any provider API key
 
 ## Install
 
@@ -27,6 +28,7 @@ Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
 Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
+The local transform tools and background removal do not require provider keys. Only generation and edit routes need API keys.
 
 For MCP clients, use whatever field name the client expects for process environment variables. In Kilo, the working key is `env` for local MCP servers. Some other clients use `environment` or similar, but the server itself only reads standard process environment variables.
 
