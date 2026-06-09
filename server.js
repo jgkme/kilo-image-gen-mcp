@@ -18,7 +18,7 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   kilo: 'black-forest-labs/flux.2-pro',
   openrouter: 'google/gemini-2.5-flash-image',
   openai: 'gpt-5-image',
-  gemini: 'gemini-3-pro-image-preview'
+  gemini: 'gemini-2.5-flash-image'
 };
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
 const KNOWN_MODELS = {
@@ -38,7 +38,7 @@ const KNOWN_MODELS = {
     'recraft/recraft-v3'
   ],
   openai: ['gpt-5-image', 'gpt-5-image-mini'],
-  gemini: ['gemini-3-pro-image-preview', 'gemini-2.5-flash-image']
+  gemini: ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview']
 };
 
 const EDIT_CAPABILITIES = {
@@ -879,7 +879,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'kilo_generate_image',
       description:
-        'Generate an image using Kilo Gateway or a configured provider. Choose a provider by intent: default/general to black-forest-labs/flux.2-pro, fast drafts to black-forest-labs/flux.2-flex, in-image text to gpt-5-image, highest-fidelity grounding to gemini-3-pro-image-preview. Provide subject, style, colors, mood, context, aspect ratio, transparency, and optional reference image.',
+        'Generate an image using Kilo Gateway or a configured provider. Choose a provider by intent: default/general to black-forest-labs/flux.2-pro, fast drafts to black-forest-labs/flux.2-flex, in-image text to gpt-5-image, Gemini defaults to gemini-2.5-flash-image and also supports gemini-3.1-flash-image-preview and gemini-3-pro-image-preview. Provide subject, style, colors, mood, context, aspect ratio, transparency, and optional reference image.',
       inputSchema: {
         type: 'object',
         properties: {
