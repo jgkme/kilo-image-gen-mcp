@@ -11,6 +11,12 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprot
 const VERSION = '0.1.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
+const DEFAULT_MODEL_BY_PROVIDER = {
+  kilo: 'black-forest-labs/flux.2-pro',
+  openrouter: 'black-forest-labs/flux.2-pro',
+  openai: 'gpt-5-image',
+  gemini: 'gemini-3-pro-image-preview'
+};
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
 const KNOWN_MODELS = {
   kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
@@ -76,12 +82,14 @@ function providerFrom(value) {
   return PROVIDERS.includes(provider) ? provider : 'kilo';
 }
 
+function defaultModel(provider) {
+  const configured = env('IMAGE_MCP_DEFAULT_MODEL').trim();
+  return configured || DEFAULT_MODEL_BY_PROVIDER[provider] || DEFAULT_MODEL;
+}
+
 function modelFor(provider, model) {
   if (model) return model;
-  if (provider === 'openrouter') return 'black-forest-labs/flux-2-pro';
-  if (provider === 'openai') return 'gpt-5-image';
-  if (provider === 'gemini') return 'gemini-3-pro-image-preview';
-  return DEFAULT_MODEL;
+  return defaultModel(provider);
 }
 
 function aspectToSize(aspect) {
@@ -331,7 +339,7 @@ async function generateImage(args) {
 
 async function listImageModels() {
   return {
-    defaults: { provider: providerFrom(), model: DEFAULT_MODEL, size: DEFAULT_SIZE },
+    defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
     providers: {
       kilo: { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations' },
       openrouter: { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions' },
@@ -356,7 +364,7 @@ async function editImage(args) {
 
 async function getProviderStatus() {
   return {
-    defaults: { provider: providerFrom(), model: DEFAULT_MODEL, size: DEFAULT_SIZE },
+    defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
     configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, Boolean(env(`${provider.toUpperCase()}_API_KEY`))]))
   };
 }

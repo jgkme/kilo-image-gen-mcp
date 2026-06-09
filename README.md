@@ -11,6 +11,7 @@ npm install -g @jgkme/kilo-image-gen-mcp
 ## Configuration
 
 Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
+Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 
 For MCP clients, use whatever field name the client expects for process environment variables. In Kilo, the working key is `env` for local MCP servers. Some other clients use `environment` or similar, but the server itself only reads standard process environment variables.
 
@@ -23,6 +24,12 @@ Provider environment variables:
 | OpenAI | `OPENAI_API_KEY` |
 | Gemini | `GEMINI_API_KEY` |
 
+Default model notes:
+
+- If `IMAGE_MCP_DEFAULT_MODEL` is set, the server uses that model when `model` is omitted.
+- Otherwise, the default follows the selected provider.
+- Kilo Gateway can route to other compatible models if your account has access to them.
+
 ## Tools
 
 ### `kilo_generate_image`
@@ -31,7 +38,7 @@ Provider environment variables:
 |---|---|---|
 | `prompt` | string | Required |
 | `provider` | string | `kilo`, `openrouter`, `openai`, `gemini` |
-| `model` | string | Defaults to `black-forest-labs/flux.2-pro` |
+| `model` | string | Optional. Defaults from `IMAGE_MCP_DEFAULT_MODEL` or provider default |
 | `size` | string | Example `1024x1024` |
 | `width` / `height` | number | Overrides `size` |
 | `aspect` | string | `square`, `landscape`, `portrait` |
@@ -54,6 +61,7 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
 ## Behavior
 
 - `provider` defaults to `IMAGE_MCP_DEFAULT_PROVIDER` or `kilo`
+- `model` defaults to `IMAGE_MCP_DEFAULT_MODEL` when set, otherwise to the provider default
 - `aspect` maps to size when width and height are not provided
 - `input_image` can be a file path, base64 string, or URL
 - `output_path` writes the generated PNG to disk
@@ -65,6 +73,7 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
 - `kilo` uses `https://api.kilo.ai/api/gateway/images/generations`
 - `openrouter`, `openai`, and `gemini` use chat-completions image flows when available
 - Errors return structured JSON text with `code`, `message`, `details`, and `retryable`
+- For Kilo/OpenRouter, you can pick a different compatible model by setting `model` explicitly or by changing `IMAGE_MCP_DEFAULT_MODEL`
 
 ## Kilo config
 
@@ -76,6 +85,7 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
       "command": ["npx", "-y", "@jgkme/kilo-image-gen-mcp"],
       "env": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "kilo",
+        "IMAGE_MCP_DEFAULT_MODEL": "black-forest-labs/flux.2-pro",
         "KILO_API_KEY": "your_kilo_api_key_here",
         "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
         "OPENAI_API_KEY": "your_openai_api_key_here",
@@ -99,6 +109,7 @@ For a local install path, use:
       "command": ["npx", "-y", "@jgkme/kilo-image-gen-mcp"],
       "env": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "kilo",
+        "IMAGE_MCP_DEFAULT_MODEL": "black-forest-labs/flux.2-pro",
         "KILO_API_KEY": "your_kilo_api_key_here",
         "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
         "OPENAI_API_KEY": "your_openai_api_key_here",
