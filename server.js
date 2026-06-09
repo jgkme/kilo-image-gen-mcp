@@ -183,6 +183,7 @@ function errorResult(error) {
       code: error?.code || 'image_mcp_error',
       message: error instanceof Error ? error.message : String(error),
       details: error?.details || undefined,
+      response: error?.response?.data || undefined,
       retryable: Boolean(error?.retryable)
     },
     null,
@@ -193,16 +194,17 @@ function errorResult(error) {
 async function kiloImagesGenerations(args) {
   const { width, height } = dimensions(args);
   const input_image = await readImageInput(args.input_image);
+  const payload = {
+    model: modelFor('kilo', args.model),
+    prompt: promptWithAspect(args),
+    width,
+    height,
+    ...(args.steps ? { steps: args.steps } : {}),
+    ...(input_image ? { input_image } : {})
+  };
   const response = await axios.post(
     'https://api.kilo.ai/api/gateway/images/generations',
-    {
-      model: modelFor('kilo', args.model),
-      prompt: promptWithAspect(args),
-      width,
-      height,
-      ...(args.steps ? { steps: args.steps } : {}),
-      ...(input_image ? { input_image } : {})
-    },
+    payload,
     { headers: { Authorization: `Bearer ${requireProviderKey('kilo')}`, 'Content-Type': 'application/json' } }
   );
 
@@ -215,16 +217,17 @@ async function kiloImagesGenerations(args) {
 async function kiloImageEdits(args) {
   const { width, height } = dimensions(args);
   const image = await readImageInput(args.reference_image || args.input_image);
+  const payload = {
+    model: modelFor('kilo', args.model),
+    prompt: promptWithAspect(args),
+    width,
+    height,
+    ...(args.steps ? { steps: args.steps } : {}),
+    input_image: image
+  };
   const response = await axios.post(
     'https://api.kilo.ai/api/gateway/images/edits',
-    {
-      model: modelFor('kilo', args.model),
-      prompt: promptWithAspect(args),
-      width,
-      height,
-      ...(args.steps ? { steps: args.steps } : {}),
-      input_image: image
-    },
+    payload,
     { headers: { Authorization: `Bearer ${requireProviderKey('kilo')}`, 'Content-Type': 'application/json' } }
   );
 
