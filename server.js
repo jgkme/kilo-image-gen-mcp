@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import FormData from 'form-data';
 import axios from 'axios';
 import sharp from 'sharp';
@@ -345,7 +345,14 @@ function imageTextResult(b64, outputPath) {
 
 function imageToolContent(result) {
   const mimeType = result.mimeType || 'image/png';
-  const content = [{ type: 'image', data: result.data, mimeType }];
+  const content = [
+    {
+      type: 'resource_link',
+      name: path.basename(result.output_path || 'image.png'),
+      uri: pathToFileURL(result.output_path || path.resolve(process.cwd(), 'generated-images', 'image.png')).href,
+      mimeType
+    }
+  ];
   content.push({
     type: 'text',
     text: JSON.stringify({ type: 'image', mimeType, output_path: result.output_path || undefined }, null, 2)

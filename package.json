@@ -18,7 +18,11 @@
   },
   "license": "MIT",
   "scripts": {
-    "start": "node ./server.js"
+    "start": "node ./server.js",
+    "smoke": "node ./scripts/smoke-image.mjs",
+    "smoke:openrouter": "node ./scripts/smoke-image.mjs --provider openrouter --prompt 'a colorful parrot perched on a branch, simple background'",
+    "smoke:openai": "node ./scripts/smoke-image.mjs --provider openai --prompt 'a red panda wearing glasses, clean studio background' --purpose portrait",
+    "smoke:bg": "node ./scripts/smoke-image.mjs --tool background_remove --input-image generated-images/parrot.png --model modnet"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.2",

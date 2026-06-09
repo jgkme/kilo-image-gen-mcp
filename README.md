@@ -150,6 +150,24 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 - `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
 - `background_remove` uses a local `rmbg` segmentation model and supports `u2netp`, `modnet`, and `briaai`
 
+## Smoke tests
+
+The repo includes a reusable validation script:
+
+```bash
+npm run smoke -- --provider openrouter --prompt "a colorful parrot perched on a branch"
+npm run smoke -- --provider openai --prompt "a red panda wearing glasses" --purpose portrait
+npm run smoke -- --tool background_remove --input-image generated-images/parrot.png --model modnet
+```
+
+Convenience commands are also available:
+
+```bash
+npm run smoke:openrouter
+npm run smoke:openai
+npm run smoke:bg
+```
+
 ## Provider notes
 
 - `kilo` uses `https://api.kilo.ai/api/gateway/images/generations`
