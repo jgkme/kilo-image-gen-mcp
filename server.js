@@ -50,6 +50,11 @@ function providerKey(provider) {
   return undefined;
 }
 
+function providerKeyStatus(provider) {
+  const value = providerKey(provider);
+  return value ? { configured: true, length: value.length } : { configured: false, length: 0 };
+}
+
 function requireProviderKey(provider) {
   const key = providerKey(provider);
   if (!key) {
@@ -192,26 +197,7 @@ function errorResult(error) {
 }
 
 async function kiloImagesGenerations(args) {
-  const { width, height } = dimensions(args);
-  const input_image = await readImageInput(args.input_image);
-  const payload = {
-    model: modelFor('kilo', args.model),
-    prompt: promptWithAspect(args),
-    width,
-    height,
-    ...(args.steps ? { steps: args.steps } : {}),
-    ...(input_image ? { input_image } : {})
-  };
-  const response = await axios.post(
-    'https://api.kilo.ai/api/gateway/images/generations',
-    payload,
-    { headers: { Authorization: `Bearer ${requireProviderKey('kilo')}`, 'Content-Type': 'application/json' } }
-  );
-
-  const b64 = response?.data?.data?.[0]?.b64_json;
-  if (!b64) throw Object.assign(new Error('Kilo image response did not include data[0].b64_json'), { retryable: false });
-  const output_path = await writeImage(args.output_path, b64);
-  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+  return providerChatCompletion('kilo', args);
 }
 
 async function kiloImageEdits(args) {
@@ -284,7 +270,6 @@ async function openrouterImagesGenerations(args) {
 }
 
 async function providerChatCompletion(provider, args) {
-  const { width, height } = dimensions(args);
   const prompt = promptWithAspect(args);
   const image = await readImageInput(args.input_image);
   const messages = [
@@ -309,8 +294,7 @@ async function providerChatCompletion(provider, args) {
     {
       model: modelFor(provider, args.model),
       messages,
-      modalities: ['image', 'text'],
-      extra_body: { size: `${width}x${height}` }
+      modalities: ['image', 'text']
     },
     {
       headers: {
@@ -374,7 +358,7 @@ async function getProviderStatus() {
   return {
     version: VERSION,
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
-    configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, Boolean(env(`${provider.toUpperCase()}_API_KEY`))]))
+    configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)]))
   };
 }
 
