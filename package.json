@@ -1,0 +1,27 @@
+{
+  "name": "@jgkme/kilo-image-gen-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for image generation through Kilo Gateway and compatible providers.",
+  "type": "module",
+  "bin": {
+    "kilo-image-gen-mcp": "./server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jgkme/kilo-image-gen-mcp.git"
+  },
+  "license": "MIT",
+  "scripts": {
+    "start": "node ./server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.2",
+    "axios": "^1.7.9"
+  }
+}
