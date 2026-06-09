@@ -280,28 +280,7 @@ async function openrouterImageEdits(args) {
 }
 
 async function openrouterImagesGenerations(args) {
-  const { width, height } = dimensions(args);
-  const image = await readImageInput(args.input_image);
-  const form = new FormData();
-  form.append('model', modelFor('openrouter', args.model));
-  form.append('prompt', promptWithAspect(args));
-  form.append('size', `${width}x${height}`);
-  if (args.steps) form.append('steps', String(args.steps));
-  if (image) form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
-
-  const response = await axios.post('https://openrouter.ai/api/v1/images/generations', form, {
-    headers: {
-      Authorization: `Bearer ${requireProviderKey('openrouter')}`,
-      'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp',
-      'X-Title': '@jgkme/kilo-image-gen-mcp',
-      ...form.getHeaders()
-    }
-  });
-
-  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
-  if (!b64) throw Object.assign(new Error('OpenRouter image generation did not include image data'), { retryable: false, response: response?.data });
-  const output_path = await writeImage(args.output_path, b64);
-  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
+  return providerChatCompletion('openrouter', args);
 }
 
 async function providerChatCompletion(provider, args) {
@@ -393,6 +372,7 @@ async function editImage(args) {
 
 async function getProviderStatus() {
   return {
+    version: VERSION,
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
     configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, Boolean(env(`${provider.toUpperCase()}_API_KEY`))]))
   };
@@ -428,7 +408,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'get_provider_status',
-      description: 'Report configured providers and defaults.',
+      description: 'Report configured providers, defaults, and server version.',
       inputSchema: { type: 'object', properties: {} }
     },
     {
@@ -481,6 +461,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 try {
   validateStartup();
+  process.stderr.write(`@jgkme/kilo-image-gen-mcp v${VERSION} starting\n`);
   await server.connect(new StdioServerTransport());
 } catch (error) {
   process.stderr.write(`${errorResult(error)}\n`);
