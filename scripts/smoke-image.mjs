@@ -27,7 +27,21 @@ function parseArgs(argv) {
   return args;
 }
 
-function rpcClient(child) {
+function summarizeContent(content = []) {
+  const text = content.find((c) => c.type === 'text')?.text || '';
+  const summary = {};
+  for (const line of text.split('\n')) {
+    const match = line.match(/^[-*]\s+(Path|MIME type|Size|Model|Backend|Action):\s+`([^`]+)`$/);
+    if (match) summary[match[1].toLowerCase().replace(/\s+/g, '_')] = match[2];
+  }
+  const pathValue = summary.path || 'unknown';
+  const parts = [summary.action || 'image', pathValue];
+  if (summary.backend || summary.model) parts.push(`[${[summary.backend, summary.model].filter(Boolean).join('/')}]`);
+  if (summary.size) parts.push(summary.size);
+  return parts.join(' ');
+}
+
+function rpcClient(child, verbose = false) {
   let id = 0;
   const pending = new Map();
   const rl = readline.createInterface({ input: child.stdout });
@@ -40,11 +54,13 @@ function rpcClient(child) {
         pending.delete(msg.id);
       }
     } catch {
-      process.stderr.write(line + '\n');
+      if (verbose) process.stderr.write(line + '\n');
     }
   });
 
-  child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+  if (verbose) {
+    child.stderr.on('data', (chunk) => process.stderr.write(chunk));
+  }
 
   return {
     call(method, params) {
@@ -62,13 +78,15 @@ const provider = String(args.provider || 'openrouter').toLowerCase();
 const tool = String(args.tool || 'generate_image');
 const prompt = args.prompt || 'a colorful parrot perched on a branch, simple background';
 const outputPath = args.output || `generated-images/${provider}-${tool}.png`;
+const jsonOutput = Boolean(args.json);
+const verbose = Boolean(args.verbose);
 
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 try { await fs.unlink(outputPath); } catch {}
 
 const env = { ...process.env };
 const child = spawn('node', ['./server.js'], { cwd: process.cwd(), env });
-const rpc = rpcClient(child);
+const rpc = rpcClient(child, verbose);
 
 await rpc.call('initialize', {
   protocolVersion: '2024-11-05',
@@ -101,7 +119,13 @@ const callArgs = {
 };
 
 const response = await rpc.call('tools/call', { name: tool, arguments: callArgs });
-console.log(JSON.stringify(response, null, 2));
+if (jsonOutput) {
+  console.log(JSON.stringify(response, null, 2));
+} else if (response?.result?.isError) {
+  console.log(JSON.stringify(response.result.content, null, 2));
+} else {
+  console.log(summarizeContent(response?.result?.content));
+}
 child.kill('SIGTERM');
 
 const stat = await fs.stat(path.resolve(outputPath));

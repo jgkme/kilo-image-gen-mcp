@@ -1,6 +1,6 @@
 {
   "name": "@jgkme/kilo-image-gen-mcp",
-  "version": "0.6.0",
+  "version": "0.8.0",
   "description": "MCP server for image generation and local image manipulation/finalization through Kilo Gateway and compatible providers.",
   "type": "module",
   "bin": {
@@ -22,7 +22,9 @@
     "smoke": "node ./scripts/smoke-image.mjs",
     "smoke:openrouter": "node ./scripts/smoke-image.mjs --provider openrouter --prompt 'a colorful parrot perched on a branch, simple background'",
     "smoke:openai": "node ./scripts/smoke-image.mjs --provider openai --prompt 'a red panda wearing glasses, clean studio background' --purpose portrait",
-    "smoke:bg": "node ./scripts/smoke-image.mjs --tool background_remove --input-image generated-images/parrot.png --model modnet"
+    "smoke:bg": "node ./scripts/smoke-image.mjs --tool background_remove --input-image generated-images/parrot.png --model modnet",
+    "demo:bg": "node ./scripts/smoke-image.mjs --tool background_remove --input-image generated-images/j-gemini-openrouter.png --output generated-images/demo-bg.png",
+    "demo:finalize": "node ./scripts/smoke-image.mjs --tool finalize_image --input-image generated-images/j-gemini-openrouter.png --remove-background true --background-backend imgly --background-model medium --trim true --output generated-images/demo-finalize.png"
   },
   "dependencies": {
     "@imgly/background-removal-node": "^1.4.5",

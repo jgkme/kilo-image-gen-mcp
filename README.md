@@ -16,6 +16,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - Reusable smoke validation commands for OpenRouter, OpenAI, and local background removal
 - Debug mode via `IMAGE_MCP_DEBUG=1` for full error details and response payloads
 - `background_remove`, `resize_image`, `auto_crop`, and `finalize_image` work without any provider API key
+- The smoke harness prints compact summaries by default; add `--json` or `--verbose` when you need raw output
 
 ## Install
 
@@ -129,6 +130,8 @@ Locally removes a background with a segmentation model and preserves transparenc
 | `backend` | string | Optional. `rmbg` for fast/default or `imgly` for higher quality |
 | `model` | string | Optional. `u2netp`, `modnet`, or `briaai` |
 | `max_resolution` | number | Optional. Defaults to `2048` |
+| `alpha_feather` | number | Optional. Softens the final alpha edge a little |
+| `alpha_threshold` | number | Optional. Tightens the alpha mask after feathering |
 | `output_path` | string | Optional output file path |
 
 If `backend` is omitted, the server uses `IMAGE_MCP_DEFAULT_BG_BACKEND` when set, otherwise `rmbg`.
@@ -157,6 +160,8 @@ One-call local workflow for cleanup and export.
 | `background_backend` | string | Optional. `rmbg` or `imgly` |
 | `background_model` | string | Optional. Backend-specific model name |
 | `max_resolution` | number | Optional. Used by the background-removal step |
+| `alpha_feather` | number | Optional. Softens the final alpha edge a little |
+| `alpha_threshold` | number | Optional. Tightens the alpha mask after feathering |
 | `trim` | boolean | Optional. Trim transparent or empty borders |
 | `width` / `height` | number | Optional. Resize target |
 | `fit` | string | Optional. `cover`, `contain`, `fill`, `inside`, `outside` |
@@ -167,6 +172,8 @@ One-call local workflow for cleanup and export.
 Typical use: remove the background from a logo or product shot, then trim or resize it in the same call.
 
 If `background_backend` is omitted, the server uses `IMAGE_MCP_DEFAULT_BG_BACKEND` when set, otherwise `rmbg`.
+
+If you still see tiny edge residue after removal, try a small `alpha_feather` value like `0.4` to `0.8` or a mild `alpha_threshold` like `8` to `20`.
 
 ### `resize_image`
 
@@ -207,6 +214,7 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 - `background_remove` uses a local `rmbg` segmentation model by default and can switch to `imgly` for better edges
 - `finalize_image` can chain local background removal, trim, crop, resize, and flatten in one call
 - `IMAGE_MCP_DEBUG=1` expands tool error output with `details`, `response`, and `stack`
+- If a generated image still contains checkerboard-like residue in the background, use `background_backend=imgly` and `finalize_image` first; deeper alpha cleanup would require refinement knobs
 
 ## Smoke tests
 
@@ -225,7 +233,11 @@ Convenience commands are also available:
 npm run smoke:openrouter
 npm run smoke:openai
 npm run smoke:bg
+npm run demo:bg
+npm run demo:finalize
 ```
+
+Demo commands are useful when you want to test local background removal or finalization directly against an existing generated image without typing the full tool flags.
 
 ## Provider notes
 

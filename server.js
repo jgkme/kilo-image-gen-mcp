@@ -11,7 +11,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.6.0';
+const VERSION = '0.8.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -527,6 +527,12 @@ function validateProcessingArgs(args) {
   if (args.max_resolution !== undefined && args.max_resolution <= 0) {
     throw Object.assign(new Error('max_resolution must be greater than 0'), { code: 'validation_error', retryable: false });
   }
+  if (args.alpha_feather !== undefined && (!Number.isFinite(args.alpha_feather) || args.alpha_feather < 0)) {
+    throw Object.assign(new Error('alpha_feather must be a number greater than or equal to 0'), { code: 'validation_error', retryable: false });
+  }
+  if (args.alpha_threshold !== undefined && (!Number.isFinite(args.alpha_threshold) || args.alpha_threshold < 0 || args.alpha_threshold > 255)) {
+    throw Object.assign(new Error('alpha_threshold must be a number between 0 and 255'), { code: 'validation_error', retryable: false });
+  }
 }
 
 function errorResult(error) {
@@ -871,6 +877,32 @@ async function saveBufferResult(buffer, outputPath, fallbackPrefix) {
   return target;
 }
 
+async function refineAlphaBuffer(buffer, args = {}) {
+  const feather = Number(args.alpha_feather || 0);
+  const threshold = args.alpha_threshold === undefined ? undefined : Number(args.alpha_threshold);
+  if ((!Number.isFinite(feather) || feather <= 0) && threshold === undefined) return buffer;
+
+  const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const width = info.width;
+  const height = info.height;
+  const alpha = Buffer.alloc(width * height);
+
+  for (let i = 0, p = 0; p < alpha.length; i += info.channels, p += 1) {
+    alpha[p] = data[i + info.channels - 1];
+  }
+
+  let alphaPipeline = sharp(alpha, { raw: { width, height, channels: 1 } });
+  if (Number.isFinite(feather) && feather > 0) alphaPipeline = alphaPipeline.blur(feather);
+  if (threshold !== undefined) alphaPipeline = alphaPipeline.threshold(Math.max(0, Math.min(255, threshold)));
+
+  const refinedAlpha = await alphaPipeline.toBuffer();
+  for (let i = 0, p = 0; p < refinedAlpha.length; i += info.channels, p += 1) {
+    data[i + info.channels - 1] = refinedAlpha[p];
+  }
+
+  return sharp(data, { raw: { width, height, channels: info.channels } }).png().toBuffer();
+}
+
 async function removeBackgroundBuffer(args) {
   const backend = backgroundRemoveBackend(args.backend);
   const modelName = String(args.model || (backend === 'imgly' ? 'medium' : 'modnet')).toLowerCase();
@@ -935,13 +967,14 @@ async function autoCropImage(args) {
 
 async function backgroundRemoveImage(args) {
   const { buffer: outputBuffer, backend, model } = await removeBackgroundBuffer(args);
-  const output_path = await saveBufferResult(outputBuffer, args.output_path, 'background-remove');
+  const refinedBuffer = await refineAlphaBuffer(outputBuffer, args);
+  const output_path = await saveBufferResult(refinedBuffer, args.output_path, 'background-remove');
   return {
     type: 'image',
-    data: outputBuffer.toString('base64'),
+    data: refinedBuffer.toString('base64'),
     mimeType: 'image/png',
     output_path,
-    bytes: outputBuffer.length,
+    bytes: refinedBuffer.length,
     backend,
     model,
     action: 'background_remove'
@@ -983,7 +1016,8 @@ async function finalizeImage(args) {
   }
 
   const output_path = await saveSharpResult(pipeline, args.output_path, 'finalize');
-  const outputBuffer = await fs.readFile(output_path);
+  const outputBuffer = await refineAlphaBuffer(await fs.readFile(output_path), args);
+  await fs.writeFile(output_path, outputBuffer);
   const outputMetadata = await sharp(outputBuffer, { failOn: 'none' }).metadata();
   return {
     type: 'image',
@@ -1157,6 +1191,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS },
           model: { type: 'string' },
           max_resolution: { type: 'number' },
+          alpha_feather: { type: 'number' },
+          alpha_threshold: { type: 'number' },
           output_path: { type: 'string' }
         },
         required: ['input_image']
@@ -1173,6 +1209,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
           background_backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS },
           background_model: { type: 'string' },
           max_resolution: { type: 'number' },
+          alpha_feather: { type: 'number' },
+          alpha_threshold: { type: 'number' },
           trim: { type: 'boolean' },
           width: { type: 'number' },
           height: { type: 'number' },
