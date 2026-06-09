@@ -12,6 +12,8 @@ npm install -g @jgkme/kilo-image-gen-mcp
 
 Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 
+For MCP clients, use whatever field name the client expects for process environment variables. In Kilo, the working key is `env` for local MCP servers. Some other clients use `environment` or similar, but the server itself only reads standard process environment variables.
+
 Provider environment variables:
 
 | Provider | Variable |
@@ -69,7 +71,7 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
 ```json
 {
   "mcp": {
-  "kilo-image-gen": {
+    "kilo-image-gen": {
       "type": "local",
       "command": ["npx", "-y", "@jgkme/kilo-image-gen-mcp"],
       "env": {
@@ -84,6 +86,8 @@ Same shape as `kilo_generate_image`, but requires `input_image` and routes the p
   }
 }
 ```
+
+If you are using another MCP client such as Cursor, continue using the same process environment variable names (`KILO_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), but match that client’s config schema for local server env injection. The key point is that the launched process must receive those variables in its runtime environment.
 
 For a local install path, use:
 
