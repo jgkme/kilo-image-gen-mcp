@@ -52,7 +52,12 @@ function providerKey(provider) {
 
 function providerKeyStatus(provider) {
   const value = providerKey(provider);
-  return value ? { configured: true, length: value.length } : { configured: false, length: 0 };
+  if (!value) return { configured: false, length: 0 };
+  return {
+    configured: true,
+    length: value.length,
+    preview: `${value.slice(0, 4)}...${value.slice(-2)}`
+  };
 }
 
 function requireProviderKey(provider) {
