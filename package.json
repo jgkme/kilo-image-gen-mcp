@@ -1,6 +1,6 @@
 {
   "name": "@jgkme/kilo-image-gen-mcp",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "MCP server for image generation and local image manipulation/finalization through Kilo Gateway and compatible providers.",
   "type": "module",
   "bin": {

@@ -28,6 +28,7 @@ npm install -g @jgkme/kilo-image-gen-mcp
 Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
+Set the default local background-removal backend with `IMAGE_MCP_DEFAULT_BG_BACKEND` (`rmbg` or `imgly`).
 Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
 The local transform tools, background removal, and finalize workflow do not require provider keys. Only generation and edit routes need API keys.
 
@@ -130,6 +131,8 @@ Locally removes a background with a segmentation model and preserves transparenc
 | `max_resolution` | number | Optional. Defaults to `2048` |
 | `output_path` | string | Optional output file path |
 
+If `backend` is omitted, the server uses `IMAGE_MCP_DEFAULT_BG_BACKEND` when set, otherwise `rmbg`.
+
 Backend notes:
 
 - `rmbg` is the fast default and uses `u2netp`, `modnet`, or `briaai`
@@ -162,6 +165,8 @@ One-call local workflow for cleanup and export.
 | `output_path` | string | Optional output file path |
 
 Typical use: remove the background from a logo or product shot, then trim or resize it in the same call.
+
+If `background_backend` is omitted, the server uses `IMAGE_MCP_DEFAULT_BG_BACKEND` when set, otherwise `rmbg`.
 
 ### `resize_image`
 
@@ -244,6 +249,7 @@ npm run smoke:bg
       "env": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "kilo",
         "IMAGE_MCP_DEFAULT_MODEL": "black-forest-labs/flux.2-pro",
+        "IMAGE_MCP_DEFAULT_BG_BACKEND": "imgly",
         "KILO_API_KEY": "your_kilo_api_key_here",
         "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
         "OPENAI_API_KEY": "your_openai_api_key_here",
@@ -268,6 +274,7 @@ For a local install path, use:
       "env": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "kilo",
         "IMAGE_MCP_DEFAULT_MODEL": "black-forest-labs/flux.2-pro",
+        "IMAGE_MCP_DEFAULT_BG_BACKEND": "imgly",
         "KILO_API_KEY": "your_kilo_api_key_here",
         "OPENROUTER_API_KEY": "your_openrouter_api_key_here",
         "OPENAI_API_KEY": "your_openai_api_key_here",

@@ -11,7 +11,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.5.0';
+const VERSION = '0.6.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -120,6 +120,11 @@ function env(name) {
 
 function debugMode() {
   return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_DEBUG').toLowerCase());
+}
+
+function backgroundRemoveBackend(value) {
+  const backend = String(value || env('IMAGE_MCP_DEFAULT_BG_BACKEND') || 'rmbg').toLowerCase();
+  return BACKGROUND_REMOVE_BACKENDS.includes(backend) ? backend : 'rmbg';
 }
 
 let _cachedHintedOutputDir = null;
@@ -506,7 +511,7 @@ function validateProcessingArgs(args) {
   if (args.backend && typeof args.backend !== 'string') {
     throw Object.assign(new Error(`backend must be one of ${BACKGROUND_REMOVE_BACKENDS.join(', ')}`), { code: 'validation_error', retryable: false });
   }
-  const backend = String(args.backend || 'rmbg').toLowerCase();
+  const backend = backgroundRemoveBackend(args.backend);
   if (args.model && typeof args.model !== 'string') {
     throw Object.assign(new Error('model must be a string'), { code: 'validation_error', retryable: false });
   }
@@ -867,7 +872,7 @@ async function saveBufferResult(buffer, outputPath, fallbackPrefix) {
 }
 
 async function removeBackgroundBuffer(args) {
-  const backend = String(args.backend || 'rmbg').toLowerCase();
+  const backend = backgroundRemoveBackend(args.backend);
   const modelName = String(args.model || (backend === 'imgly' ? 'medium' : 'modnet')).toLowerCase();
   const input =
     backend === 'imgly'
