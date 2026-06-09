@@ -13,6 +13,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - Gemini support for `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, and `gemini-3-pro-image-preview`
 - Global Kilo skills for generation, editing, background removal, and transforms
 - Reusable smoke validation commands for OpenRouter, OpenAI, and local background removal
+- Debug mode via `IMAGE_MCP_DEBUG=1` for full error details and response payloads
 
 ## Install
 
@@ -25,6 +26,7 @@ npm install -g @jgkme/kilo-image-gen-mcp
 Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
+Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
 
 For MCP clients, use whatever field name the client expects for process environment variables. In Kilo, the working key is `env` for local MCP servers. Some other clients use `environment` or similar, but the server itself only reads standard process environment variables.
 
@@ -161,6 +163,7 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 - `edit_image` uses native edit endpoints for Kilo, OpenAI, and OpenRouter when possible
 - `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
 - `background_remove` uses a local `rmbg` segmentation model and supports `u2netp`, `modnet`, and `briaai`
+- `IMAGE_MCP_DEBUG=1` expands tool error output with `details`, `response`, and `stack`
 
 ## Smoke tests
 
@@ -239,3 +242,5 @@ For a local install path, use:
 ## Troubleshooting
 
 If generation fails, verify the provider API key and model name. If no output file is written, confirm `output_path` points to a writable location.
+
+If you need full provider payloads for debugging, set `IMAGE_MCP_DEBUG=1` in the MCP server environment and retry the same call.

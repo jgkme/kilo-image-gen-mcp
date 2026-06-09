@@ -10,7 +10,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -113,6 +113,10 @@ function validateStartup() {
 
 function env(name) {
   return process.env[name] || '';
+}
+
+function debugMode() {
+  return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_DEBUG').toLowerCase());
 }
 
 let _cachedHintedOutputDir = null;
@@ -350,6 +354,10 @@ function imageToolContent(result) {
   if (result.provider) lines.push(`- Provider: \`${result.provider}\``);
   if (result.model) lines.push(`- Model: \`${result.model}\``);
   if (result.action) lines.push(`- Action: \`${result.action}\``);
+  if (debugMode() && result.response) {
+    const responseText = typeof result.response === 'string' ? result.response : JSON.stringify(result.response).slice(0, 500);
+    lines.push(`- Response: \`${responseText}\``);
+  }
   const content = [
     {
       type: 'resource_link',
@@ -506,17 +514,17 @@ function validateProcessingArgs(args) {
 }
 
 function errorResult(error) {
-  return JSON.stringify(
-    {
-      code: error?.code || 'image_mcp_error',
-      message: error instanceof Error ? error.message : String(error),
-      details: error?.details || undefined,
-      response: error?.response?.data || undefined,
-      retryable: Boolean(error?.retryable)
-    },
-    null,
-    2
-  );
+  const payload = {
+    code: error?.code || 'image_mcp_error',
+    message: error instanceof Error ? error.message : String(error),
+    retryable: Boolean(error?.retryable)
+  };
+  if (debugMode()) {
+    payload.details = error?.details || undefined;
+    payload.response = error?.response?.data || error?.response || undefined;
+    payload.stack = error instanceof Error ? error.stack : undefined;
+  }
+  return JSON.stringify(payload, null, 2);
 }
 
 async function kiloImagesGenerations(args) {
