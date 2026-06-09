@@ -306,6 +306,16 @@ function imageTextResult(b64, outputPath) {
   return JSON.stringify({ type: 'image', data: b64, mimeType: 'image/png', output_path: outputPath || undefined }, null, 2);
 }
 
+function imageToolContent(result) {
+  const mimeType = result.mimeType || 'image/png';
+  const content = [{ type: 'image', data: result.data, mimeType }];
+  content.push({
+    type: 'text',
+    text: JSON.stringify({ type: 'image', mimeType, output_path: result.output_path || undefined }, null, 2)
+  });
+  return content;
+}
+
 function defaultSavedImagePath(prefix = 'image') {
   return path.join(outputDir(), outputFileName(prefix));
 }
@@ -1009,27 +1019,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
     if (name === 'kilo_generate_image') {
       const result = await generateImage(args);
-      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+      return { content: imageToolContent(result) };
     }
     if (name === 'generate_image') {
       const result = await generateImage(args);
-      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+      return { content: imageToolContent(result) };
     }
     if (name === 'edit_image') {
       const result = await editImage(args);
-      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+      return { content: imageToolContent(result) };
     }
     if (name === 'background_remove') {
       const result = await backgroundRemoveImage(args);
-      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+      return { content: imageToolContent(result) };
     }
     if (name === 'resize_image') {
       const result = await resizeImage(args);
-      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+      return { content: imageToolContent(result) };
     }
     if (name === 'auto_crop') {
       const result = await autoCropImage(args);
-      return { content: [{ type: 'text', text: imageTextResult(result.data, result.output_path) }] };
+      return { content: imageToolContent(result) };
     }
     if (name === 'list_image_models') {
       return { content: [{ type: 'text', text: JSON.stringify(await listImageModels(), null, 2) }] };
