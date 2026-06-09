@@ -6,11 +6,12 @@ import FormData from 'form-data';
 import axios from 'axios';
 import sharp from 'sharp';
 import { rmbg, createBriaaiModel, createModnetModel, createU2netpModel } from 'rmbg';
+import removeBackground from '@imgly/background-removal-node';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.3.0';
+const VERSION = '0.5.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -21,7 +22,9 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   openai: 'gpt-image-1',
   gemini: 'gemini-2.5-flash-image'
 };
+const BACKGROUND_REMOVE_BACKENDS = ['rmbg', 'imgly'];
 const BACKGROUND_REMOVE_MODELS = ['u2netp', 'modnet', 'briaai'];
+const IMGLY_BACKGROUND_REMOVE_MODELS = ['small', 'medium'];
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
 const KNOWN_MODELS = {
   kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
@@ -353,6 +356,7 @@ function imageToolContent(result) {
   if (Number.isFinite(result.bytes)) lines.push(`- Size: \`${result.bytes} bytes\``);
   if (result.provider) lines.push(`- Provider: \`${result.provider}\``);
   if (result.model) lines.push(`- Model: \`${result.model}\``);
+  if (result.backend) lines.push(`- Backend: \`${result.backend}\``);
   if (result.action) lines.push(`- Action: \`${result.action}\``);
   if (debugMode() && result.response) {
     const responseText = typeof result.response === 'string' ? result.response : JSON.stringify(result.response).slice(0, 500);
@@ -499,11 +503,18 @@ function validateProcessingArgs(args) {
   if (args.fit && !PROCESSING_FITS.includes(args.fit)) {
     throw Object.assign(new Error(`fit must be one of ${PROCESSING_FITS.join(', ')}`), { code: 'validation_error', retryable: false });
   }
+  if (args.backend && typeof args.backend !== 'string') {
+    throw Object.assign(new Error(`backend must be one of ${BACKGROUND_REMOVE_BACKENDS.join(', ')}`), { code: 'validation_error', retryable: false });
+  }
+  const backend = String(args.backend || 'rmbg').toLowerCase();
   if (args.model && typeof args.model !== 'string') {
     throw Object.assign(new Error('model must be a string'), { code: 'validation_error', retryable: false });
   }
-  if (args.model && !BACKGROUND_REMOVE_MODELS.includes(String(args.model).toLowerCase())) {
+  if (backend === 'rmbg' && args.model && !BACKGROUND_REMOVE_MODELS.includes(String(args.model).toLowerCase())) {
     throw Object.assign(new Error(`model must be one of ${BACKGROUND_REMOVE_MODELS.join(', ')}`), { code: 'validation_error', retryable: false });
+  }
+  if (backend === 'imgly' && args.model && !IMGLY_BACKGROUND_REMOVE_MODELS.includes(String(args.model).toLowerCase())) {
+    throw Object.assign(new Error(`model must be one of ${IMGLY_BACKGROUND_REMOVE_MODELS.join(', ')}`), { code: 'validation_error', retryable: false });
   }
   if (args.max_resolution !== undefined && !Number.isFinite(args.max_resolution)) {
     throw Object.assign(new Error('max_resolution must be a number'), { code: 'validation_error', retryable: false });
@@ -847,6 +858,48 @@ async function saveSharpResult(image, outputPath, fallbackPrefix) {
   return target;
 }
 
+async function saveBufferResult(buffer, outputPath, fallbackPrefix) {
+  const baseDir = await ensureOutputDir();
+  const target = outputPath ? normalizeOutputPath(outputPath, fallbackPrefix) : path.join(baseDir, outputFileName(fallbackPrefix));
+  await ensureDir(path.dirname(target));
+  await fs.writeFile(target, buffer);
+  return target;
+}
+
+async function removeBackgroundBuffer(args) {
+  const backend = String(args.backend || 'rmbg').toLowerCase();
+  const modelName = String(args.model || (backend === 'imgly' ? 'medium' : 'modnet')).toLowerCase();
+  const input =
+    backend === 'imgly'
+      ? /^https?:\/\//.test(args.input_image) || args.input_image.startsWith('data:')
+        ? args.input_image
+        : path.resolve(args.input_image)
+      : await readImageBuffer(args.input_image);
+
+  if (backend === 'imgly') {
+    const blob = await removeBackground(input, {
+      model: modelName === 'small' ? 'small' : 'medium',
+      debug: debugMode(),
+      output: {
+        format: 'image/png',
+        type: 'foreground',
+        quality: 0.8
+      }
+    });
+    const buffer = Buffer.from(await blob.arrayBuffer());
+    return { buffer, backend, model: modelName === 'small' ? 'small' : 'medium' };
+  }
+
+  const model = modelName === 'briaai' ? createBriaaiModel() : modelName === 'u2netp' ? createU2netpModel() : createModnetModel();
+  const buffer = await rmbg(input, {
+    model,
+    maxResolution: Math.max(1, Number(args.max_resolution) || 2048),
+    cacheDir: path.join(process.cwd(), '.cache', 'rmbg'),
+    enableCache: true
+  });
+  return { buffer, backend, model: modelName === 'briaai' ? 'briaai' : modelName === 'u2netp' ? 'u2netp' : 'modnet' };
+}
+
 async function resizeImage(args) {
   const { image } = await loadSharpInput(args.input_image);
   const { width, height } = dimensions(args);
@@ -876,19 +929,69 @@ async function autoCropImage(args) {
 }
 
 async function backgroundRemoveImage(args) {
-  const modelName = String(args.model || 'modnet').toLowerCase();
-  const model = modelName === 'briaai' ? createBriaaiModel() : modelName === 'u2netp' ? createU2netpModel() : createModnetModel();
-  const input = await readImageBuffer(args.input_image);
-  const outputBuffer = await rmbg(input, {
+  const { buffer: outputBuffer, backend, model } = await removeBackgroundBuffer(args);
+  const output_path = await saveBufferResult(outputBuffer, args.output_path, 'background-remove');
+  return {
+    type: 'image',
+    data: outputBuffer.toString('base64'),
+    mimeType: 'image/png',
+    output_path,
+    bytes: outputBuffer.length,
+    backend,
     model,
-    maxResolution: Math.max(1, Number(args.max_resolution) || 2048),
-    cacheDir: path.join(process.cwd(), '.cache', 'rmbg'),
-    enableCache: true
-  });
-  const output_path = args.output_path ? normalizeOutputPath(args.output_path, 'background-remove') : path.join(outputDir(), outputFileName('background-remove'));
-  await ensureDir(path.dirname(output_path));
-  await fs.writeFile(output_path, outputBuffer);
-  return { type: 'image', data: outputBuffer.toString('base64'), mimeType: 'image/png', output_path };
+    action: 'background_remove'
+  };
+}
+
+async function finalizeImage(args) {
+  let inputBuffer = await readImageBuffer(args.input_image);
+  let backgroundInfo;
+
+  if (args.remove_background) {
+    backgroundInfo = await removeBackgroundBuffer({
+      input_image: args.input_image,
+      backend: args.background_backend,
+      model: args.background_model,
+      max_resolution: args.max_resolution
+    });
+    inputBuffer = backgroundInfo.buffer;
+  }
+
+  const image = sharp(inputBuffer, { failOn: 'none' }).rotate();
+  const metadata = await image.metadata();
+  let pipeline = image;
+
+  if (Number.isFinite(args.width) && Number.isFinite(args.height)) {
+    pipeline = pipeline.resize({
+      width: args.width,
+      height: args.height,
+      fit: args.fit || 'cover',
+      position: args.gravity || 'centre',
+      withoutEnlargement: false
+    });
+  } else if (args.trim) {
+    pipeline = pipeline.trim();
+  }
+
+  if (args.background) {
+    pipeline = pipeline.flatten({ background: args.background });
+  }
+
+  const output_path = await saveSharpResult(pipeline, args.output_path, 'finalize');
+  const outputBuffer = await fs.readFile(output_path);
+  const outputMetadata = await sharp(outputBuffer, { failOn: 'none' }).metadata();
+  return {
+    type: 'image',
+    data: outputBuffer.toString('base64'),
+    mimeType: 'image/png',
+    output_path,
+    bytes: outputBuffer.length,
+    width: outputMetadata.width || metadata.width,
+    height: outputMetadata.height || metadata.height,
+    backend: backgroundInfo?.backend,
+    model: backgroundInfo?.model,
+    action: 'finalize_image'
+  };
 }
 
 async function generateImage(args) {
@@ -1046,8 +1149,31 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         type: 'object',
         properties: {
           input_image: { type: 'string' },
-          model: { type: 'string', enum: BACKGROUND_REMOVE_MODELS },
+          backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS },
+          model: { type: 'string' },
           max_resolution: { type: 'number' },
+          output_path: { type: 'string' }
+        },
+        required: ['input_image']
+      }
+    },
+    {
+      name: 'finalize_image',
+      description: 'Finalize an image locally by optionally removing the background and then cropping, trimming, resizing, and saving a PNG.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          input_image: { type: 'string' },
+          remove_background: { type: 'boolean' },
+          background_backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS },
+          background_model: { type: 'string' },
+          max_resolution: { type: 'number' },
+          trim: { type: 'boolean' },
+          width: { type: 'number' },
+          height: { type: 'number' },
+          fit: { type: 'string', enum: PROCESSING_FITS },
+          gravity: { type: 'string' },
+          background: { type: 'string' },
           output_path: { type: 'string' }
         },
         required: ['input_image']
@@ -1093,6 +1219,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'kilo_generate_image' || name === 'edit_image') validateArgs(args);
     if (name === 'generate_image') validateArgs(args);
     if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
+    if (name === 'finalize_image') validateProcessingArgs({ ...args, backend: args.background_backend, model: args.background_model });
     if (name === 'kilo_generate_image') {
       const result = await generateImage(args);
       return { content: imageToolContent(result) };
@@ -1107,6 +1234,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     if (name === 'background_remove') {
       const result = await backgroundRemoveImage(args);
+      return { content: imageToolContent(result) };
+    }
+    if (name === 'finalize_image') {
+      const result = await finalizeImage(args);
       return { content: imageToolContent(result) };
     }
     if (name === 'resize_image') {

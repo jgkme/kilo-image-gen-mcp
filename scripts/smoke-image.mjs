@@ -15,7 +15,13 @@ function parseArgs(argv) {
       args[key] = true;
       continue;
     }
-    args[key] = next;
+    if (next === 'true' || next === 'false') {
+      args[key] = next === 'true';
+    } else if (['max_resolution', 'width', 'height'].includes(key) && Number.isFinite(Number(next))) {
+      args[key] = Number(next);
+    } else {
+      args[key] = next;
+    }
     i += 1;
   }
   return args;
@@ -81,7 +87,17 @@ const callArgs = {
   ...(args.style ? { style: args.style } : {}),
   ...(args.input_image ? { input_image: args.input_image } : {}),
   ...(args.reference_image ? { reference_image: args.reference_image } : {}),
-  ...(args.max_resolution ? { max_resolution: Number(args.max_resolution) } : {})
+  ...(args.width !== undefined ? { width: Number(args.width) } : {}),
+  ...(args.height !== undefined ? { height: Number(args.height) } : {}),
+  ...(args.fit ? { fit: args.fit } : {}),
+  ...(args.gravity ? { gravity: args.gravity } : {}),
+  ...(args.background ? { background: args.background } : {}),
+  ...(args.max_resolution !== undefined ? { max_resolution: Number(args.max_resolution) } : {}),
+  ...(args.backend ? { backend: args.backend } : {}),
+  ...(args.remove_background !== undefined ? { remove_background: args.remove_background } : {}),
+  ...(args.background_backend ? { background_backend: args.background_backend } : {}),
+  ...(args.background_model ? { background_model: args.background_model } : {}),
+  ...(args.trim !== undefined ? { trim: args.trim } : {})
 };
 
 const response = await rpc.call('tools/call', { name: tool, arguments: callArgs });

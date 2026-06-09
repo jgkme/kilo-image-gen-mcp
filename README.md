@@ -9,12 +9,13 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - `edit_image` for prompt-driven image editing
 - `background_remove` for local segmentation-backed transparent PNG cutouts
 - `resize_image` and `auto_crop` for deterministic local transforms
+- `finalize_image` for a one-call local workflow that can remove background, trim, crop, and resize
 - Support for OpenAI `gpt-image-1`
 - Gemini support for `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, and `gemini-3-pro-image-preview`
 - Global Kilo skills for generation, editing, background removal, and transforms
 - Reusable smoke validation commands for OpenRouter, OpenAI, and local background removal
 - Debug mode via `IMAGE_MCP_DEBUG=1` for full error details and response payloads
-- `background_remove`, `resize_image`, and `auto_crop` work without any provider API key
+- `background_remove`, `resize_image`, `auto_crop`, and `finalize_image` work without any provider API key
 
 ## Install
 
@@ -28,7 +29,7 @@ Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
 Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
-The local transform tools and background removal do not require provider keys. Only generation and edit routes need API keys.
+The local transform tools, background removal, and finalize workflow do not require provider keys. Only generation and edit routes need API keys.
 
 For MCP clients, use whatever field name the client expects for process environment variables. In Kilo, the working key is `env` for local MCP servers. Some other clients use `environment` or similar, but the server itself only reads standard process environment variables.
 
@@ -124,9 +125,43 @@ Locally removes a background with a segmentation model and preserves transparenc
 | Input | Type | Notes |
 |---|---|---|
 | `input_image` | string | Required |
+| `backend` | string | Optional. `rmbg` for fast/default or `imgly` for higher quality |
 | `model` | string | Optional. `u2netp`, `modnet`, or `briaai` |
 | `max_resolution` | number | Optional. Defaults to `2048` |
 | `output_path` | string | Optional output file path |
+
+Backend notes:
+
+- `rmbg` is the fast default and uses `u2netp`, `modnet`, or `briaai`
+- `imgly` is the higher-quality path and uses `small` or `medium`
+- Both backends run locally and do not need API keys
+- Expect the quality backend to use more RAM and disk for model assets
+
+Resource notes:
+
+- CPU-only processing is fine for most images, but the quality backend may take longer on simple laptops
+- Expect roughly 40 MB to 170 MB of model assets depending on the chosen backend/model
+- GPU is optional; it helps if the host already has an accelerator, but it is not required
+
+### `finalize_image`
+
+One-call local workflow for cleanup and export.
+
+| Input | Type | Notes |
+|---|---|---|
+| `input_image` | string | Required |
+| `remove_background` | boolean | Optional. Run local background removal first |
+| `background_backend` | string | Optional. `rmbg` or `imgly` |
+| `background_model` | string | Optional. Backend-specific model name |
+| `max_resolution` | number | Optional. Used by the background-removal step |
+| `trim` | boolean | Optional. Trim transparent or empty borders |
+| `width` / `height` | number | Optional. Resize target |
+| `fit` | string | Optional. `cover`, `contain`, `fill`, `inside`, `outside` |
+| `gravity` | string | Optional crop gravity |
+| `background` | string | Optional flatten background color |
+| `output_path` | string | Optional output file path |
+
+Typical use: remove the background from a logo or product shot, then trim or resize it in the same call.
 
 ### `resize_image`
 
@@ -164,7 +199,8 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 - `edit_image` treats `input_image` as the reference image and preserves subject/composition unless instructed otherwise
 - `edit_image` uses native edit endpoints for Kilo, OpenAI, and OpenRouter when possible
 - `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
-- `background_remove` uses a local `rmbg` segmentation model and supports `u2netp`, `modnet`, and `briaai`
+- `background_remove` uses a local `rmbg` segmentation model by default and can switch to `imgly` for better edges
+- `finalize_image` can chain local background removal, trim, crop, resize, and flatten in one call
 - `IMAGE_MCP_DEBUG=1` expands tool error output with `details`, `response`, and `stack`
 
 ## Smoke tests
@@ -175,6 +211,7 @@ The repo includes a reusable validation script:
 npm run smoke -- --provider openrouter --prompt "a colorful parrot perched on a branch"
 npm run smoke -- --provider openai --prompt "a red panda wearing glasses" --purpose portrait
 npm run smoke -- --tool background_remove --input-image generated-images/parrot.png --model modnet
+npm run smoke -- --tool finalize_image --input-image generated-images/j-gemini-openrouter.png --remove-background true --background-backend imgly --background-model medium --trim true
 ```
 
 Convenience commands are also available:
@@ -194,6 +231,7 @@ npm run smoke:bg
 - Errors return structured JSON text with `code`, `message`, `details`, and `retryable`
 - For Kilo/OpenRouter, you can pick a different compatible model by setting `model` explicitly or by changing `IMAGE_MCP_DEFAULT_MODEL`
 - In live Kilo runtime tests, the MCP can receive a non-empty `KILO_API_KEY`, but the Kilo image gateway still responds with `Please pass a valid API key` / `PAID_MODEL_AUTH_REQUIRED` for image generation requests. That indicates the backend is rejecting the token at the image endpoint, not that the MCP is dropping the key.
+- Local image manipulation tools work without any provider API key after the model assets are installed or downloaded on first use.
 
 ## Kilo config
 
