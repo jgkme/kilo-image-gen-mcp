@@ -12,6 +12,7 @@ const VERSION = '0.1.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
+const PROJECT_OUTPUT_HINT_FILES = ['.image-mcp-output', '.image-mcp-output.json', '.kilo-image-output'];
 const DEFAULT_MODEL_BY_PROVIDER = {
   kilo: 'black-forest-labs/flux.2-pro',
   openrouter: 'google/gemini-2.5-flash-image',
@@ -104,9 +105,49 @@ function env(name) {
 }
 
 function outputDir() {
+  const hinted = projectOutputDirFromHint();
+  if (hinted) return hinted;
   const configured = env('IMAGE_MCP_OUTPUT_DIR').trim();
   if (configured) return path.resolve(configured);
   return path.resolve(process.cwd(), DEFAULT_OUTPUT_DIR);
+}
+
+async function readFirstExistingFile(paths) {
+  for (const candidate of paths) {
+    try {
+      return await fs.readFile(candidate, 'utf8');
+    } catch {
+      // ignore missing hint files
+    }
+  }
+  return undefined;
+}
+
+async function projectOutputDirFromHint() {
+  const explicit = env('IMAGE_MCP_PROJECT_OUTPUT_DIR').trim();
+  if (explicit) return path.resolve(explicit);
+
+  const raw = await readFirstExistingFile(PROJECT_OUTPUT_HINT_FILES.map((hint) => path.resolve(process.cwd(), hint)));
+  if (!raw) return undefined;
+
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+
+  if (trimmed.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed.outputDir === 'string' && parsed.outputDir.trim()) {
+        return path.resolve(parsed.outputDir.trim());
+      }
+      if (parsed && typeof parsed.output_path === 'string' && parsed.output_path.trim()) {
+        return path.resolve(parsed.output_path.trim());
+      }
+    } catch {
+      return undefined;
+    }
+  }
+
+  return path.resolve(trimmed);
 }
 
 async function ensureDir(dir) {
@@ -219,7 +260,7 @@ async function writeImage(outputPath, b64) {
 async function writeImageResult(result, outputPath) {
   if (!result?.data) return result;
   const baseDir = await ensureOutputDir();
-  const target = outputPath ? path.resolve(outputPath) : path.join(baseDir, outputFileName('image'));
+  const target = outputPath ? path.resolve(process.cwd(), outputPath) : path.join(baseDir, outputFileName('image'));
   await ensureDir(path.dirname(target));
   const decoded = result.data.startsWith('data:') ? mimeFromDataUrl(result.data) : { mimeType: result.mimeType || 'image/png', base64: result.data };
   await fs.writeFile(target, Buffer.from(decoded.base64, 'base64'));
@@ -570,6 +611,7 @@ async function generateImage(args) {
 }
 
 async function listImageModels() {
+  const hintedOutputDir = await projectOutputDirFromHint();
   return {
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
     providers: {
@@ -579,7 +621,7 @@ async function listImageModels() {
       gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false }
     },
     models: KNOWN_MODELS,
-    outputDir: outputDir(),
+    outputDir: hintedOutputDir || outputDir(),
     openrouter: {
       imageGeneration: {
         modalities: ['image', 'text', 'image-only'],
@@ -602,6 +644,7 @@ async function editImage(args) {
 }
 
 async function getProviderStatus() {
+  const hintedOutputDir = await projectOutputDirFromHint();
   return {
     version: VERSION,
     defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
@@ -615,7 +658,8 @@ async function getProviderStatus() {
     },
     runtime: {
       defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined,
-      defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined
+      defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined,
+      outputDir: hintedOutputDir || outputDir()
     }
   };
 }

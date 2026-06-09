@@ -12,6 +12,7 @@ npm install -g @jgkme/kilo-image-gen-mcp
 
 Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
+Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
 
 For MCP clients, use whatever field name the client expects for process environment variables. In Kilo, the working key is `env` for local MCP servers. Some other clients use `environment` or similar, but the server itself only reads standard process environment variables.
 
@@ -65,6 +66,24 @@ OpenRouter-first image generation tool with broader request options and response
 | `output_path` | string | Optional output file path |
 
 OpenRouter responses are normalized from `choices[0].message.images`, `message.content`, `data.output`, and other common image payload shapes. Multiple returned images are preserved.
+
+Project output hint:
+
+- If `IMAGE_MCP_PROJECT_OUTPUT_DIR` is set, the server writes generated images there.
+- Otherwise, if the repo root contains `.image-mcp-output`, `.image-mcp-output.json`, or `.kilo-image-output`, that value is used.
+- This is intended for project-specific layouts like Laravel `public/storage/images` without hardcoding framework detection.
+
+Example hint file contents:
+
+```text
+public/storage/images
+```
+
+Or JSON:
+
+```json
+{ "outputDir": "public/storage/images" }
+```
 
 ### `list_image_models`
 
