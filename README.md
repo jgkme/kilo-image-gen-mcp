@@ -65,6 +65,8 @@ Example MCP config:
 }
 ```
 
+See `docs/public/clients.md` for ready-to-use examples for Kilo, Cursor, and generic MCP clients.
+
 ## Workflow
 
 The typical pipeline is:

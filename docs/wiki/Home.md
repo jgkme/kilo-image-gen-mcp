@@ -3,6 +3,7 @@
 Start here:
 
 - [Getting Started](Getting-Started.md)
+- [Client Examples](Clients.md)
 - [Configuration](Configuration.md)
 - [Models](Models.md)
 - [Backends](Backends.md)
