@@ -11,7 +11,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.1';
+const VERSION = '0.8.3';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -22,7 +22,7 @@ const DEFAULT_MODEL_BY_PROVIDER = {
   openai: 'gpt-image-1',
   gemini: 'gemini-2.5-flash-image'
 };
-const BACKGROUND_REMOVE_BACKENDS = ['rmbg', 'imgly'];
+const BACKGROUND_REMOVE_BACKENDS = ['rmbg', 'imgly', 'withoutbg'];
 const BACKGROUND_REMOVE_MODELS = ['u2netp', 'modnet', 'briaai'];
 const IMGLY_BACKGROUND_REMOVE_MODELS = ['small', 'medium'];
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
@@ -79,6 +79,27 @@ function providerKey(provider) {
   if (provider === 'openai') return configuredKey('OPENAI_API_KEY');
   if (provider === 'gemini') return configuredKey('GEMINI_API_KEY');
   return undefined;
+}
+
+function withoutBgDaemonUrl() {
+  const configured = env('WITHOUTBG_DAEMON_URL').trim();
+  return configured || 'http://127.0.0.1:8765';
+}
+
+let _cachedWithoutBgHealth = { ok: false, checkedAt: 0 };
+
+async function withoutBgDaemonHealthy() {
+  const now = Date.now();
+  if (now - _cachedWithoutBgHealth.checkedAt < 5000) return _cachedWithoutBgHealth.ok;
+  try {
+    const response = await axios.get(`${withoutBgDaemonUrl().replace(/\/$/, '')}/health`, { timeout: 2000 });
+    const ok = Boolean(response?.data?.ok ?? response?.data?.status === 'ok' ?? response?.status === 200);
+    _cachedWithoutBgHealth = { ok, checkedAt: now };
+    return ok;
+  } catch {
+    _cachedWithoutBgHealth = { ok: false, checkedAt: now };
+    return false;
+  }
 }
 
 function providerKeyStatus(provider) {
@@ -1125,9 +1146,9 @@ async function refineAlphaBuffer(buffer, args = {}) {
 
 async function removeBackgroundBuffer(args) {
   const backend = backgroundRemoveBackend(args.backend);
-  const modelName = String(args.model || (backend === 'imgly' ? 'medium' : 'modnet')).toLowerCase();
+  const modelName = String(args.model || (backend === 'imgly' ? 'medium' : backend === 'withoutbg' ? 'docker-daemon' : 'modnet')).toLowerCase();
   const input =
-    backend === 'imgly'
+    backend === 'imgly' || backend === 'withoutbg'
       ? /^https?:\/\//.test(args.input_image) || args.input_image.startsWith('data:')
         ? args.input_image
         : path.resolve(args.input_image)
@@ -1145,6 +1166,49 @@ async function removeBackgroundBuffer(args) {
     });
     const buffer = Buffer.from(await blob.arrayBuffer());
     return { buffer, backend, model: modelName === 'small' ? 'small' : 'medium' };
+  }
+
+  if (backend === 'withoutbg') {
+    if (!(await withoutBgDaemonHealthy())) {
+      throw Object.assign(new Error('withoutBG local daemon is not running. Start it with `docker compose -f withoutbg-daemon/docker-compose.yml up -d` or set WITHOUTBG_DAEMON_URL to your daemon URL.'), {
+        code: 'missing_daemon',
+        retryable: false,
+        details: { daemonUrl: withoutBgDaemonUrl() }
+      });
+    }
+
+    const imageBuffer = await readImageBuffer(args.input_image);
+    const form = new FormData();
+    const inputName =
+      typeof args.input_image === 'string' && !/^https?:\/\//.test(args.input_image) && !args.input_image.startsWith('data:')
+        ? path.basename(args.input_image)
+        : 'input.png';
+    form.append('file', imageBuffer, {
+      filename: inputName || 'input.png',
+      contentType: 'image/png'
+    });
+
+    let response;
+    try {
+      response = await axios.post(`${withoutBgDaemonUrl().replace(/\/$/, '')}/remove-background`, form, {
+        headers: {
+          ...form.getHeaders()
+        },
+        responseType: 'arraybuffer',
+        timeout: 120000,
+        maxBodyLength: Infinity,
+        maxContentLength: Infinity
+      });
+    } catch (error) {
+      throw Object.assign(new Error(`withoutBG local daemon request failed: ${error?.response?.status || error?.code || error?.message || 'unknown error'}`), {
+        code: 'daemon_request_failed',
+        retryable: true,
+        details: { daemonUrl: withoutBgDaemonUrl(), response: error?.response?.data || undefined }
+      });
+    }
+
+    const buffer = Buffer.from(response.data);
+    return { buffer, backend, model: 'docker-daemon' };
   }
 
   const model = modelName === 'briaai' ? createBriaaiModel() : modelName === 'u2netp' ? createU2netpModel() : createModnetModel();
@@ -1412,7 +1476,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'background_remove',
-      description: 'Remove the background from an image with a local segmentation model and preserve transparency in the PNG output.',
+      description: 'Remove the background from an image with a local segmentation model or the shared withoutBG Docker daemon and preserve transparency in the PNG output.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1429,7 +1493,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'finalize_image',
-      description: 'Finalize an image locally by optionally removing the background and then cropping, trimming, resizing, and saving a PNG.',
+      description: 'Finalize an image locally by optionally removing the background with local or daemon-backed matting and then cropping, trimming, resizing, and saving a PNG.',
       inputSchema: {
         type: 'object',
         properties: {

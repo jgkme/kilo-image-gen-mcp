@@ -7,7 +7,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - `generate_image` for OpenRouter-first generation with response normalization
 - `kilo_generate_image` for Kilo Gateway routing
 - `edit_image` for prompt-driven image editing
-- `background_remove` for local segmentation-backed transparent PNG cutouts
+- `background_remove` for local segmentation-backed transparent PNG cutouts and the shared local withoutBG daemon
 - `resize_image` and `auto_crop` for deterministic local transforms
 - `finalize_image` for a one-call local workflow that can remove background, trim, crop, and resize
 - `background_remove` and `finalize_image` also emit alpha stats plus a multi-background inspection sheet for post-processing QA
@@ -31,6 +31,7 @@ Set the default provider with `IMAGE_MCP_DEFAULT_PROVIDER`.
 Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
 Set the default local background-removal backend with `IMAGE_MCP_DEFAULT_BG_BACKEND` (`rmbg` or `imgly`).
+Set `WITHOUTBG_DAEMON_URL` to the local daemon URL if you run the Docker-backed withoutBG service on a non-default port (defaults to `http://127.0.0.1:8765`).
 Set `IMAGE_MCP_DEFAULT_BG_ALPHA_THRESHOLD` to a number like `24` if you want the quality backend to default to a tighter mask for logos/header assets.
 Set `IMAGE_MCP_PROMPT_ENHANCE=0` to disable the deterministic prompt-enhancement pass, or leave it unset / set it to `1` to keep it enabled.
 Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
@@ -96,6 +97,14 @@ OpenRouter responses are normalized from `choices[0].message.images`, `message.c
 OpenRouter image models that are explicitly supported in this repo include `google/gemini-2.5-flash-image`, `google/gemini-3-pro-image-preview`, `openai/gpt-image-1`, `openai/gpt-5.4-image-2`, `microsoft/mai-image-2.5`, `x-ai/grok-imagine-image-quality`, `bytedance-seed/seedream-4.5`, `sourceful/riverflow-v2.5-fast:free`, `sourceful/riverflow-v2.5-fast`, `sourceful/riverflow-v2.5-pro`, `recraft/recraft-v4.1-utility`, `recraft/recraft-v4.1-vector`, `recraft/recraft-v4.1-utility-pro`, and `recraft/recraft-v4.1-pro-vector`, plus the Flux and older Riverflow families listed in `server.js`.
 
 The server also applies a small deterministic prompt-enhancement pass before generation. It expands short prompts with intent-aware hints for logos, icons, headers, vector marks, photorealism, and quality targets so clients can stay concise while the provider receives a richer prompt. Disable it with `IMAGE_MCP_PROMPT_ENHANCE=0` if you want raw prompts only.
+
+Local withoutBG daemon setup:
+
+```bash
+docker compose -f withoutbg-daemon/docker-compose.yml up -d
+```
+
+This uses OrbStack or Docker to run a single shared `withoutbg` container on `http://127.0.0.1:8765` so every VS Code project can reuse the same loaded model instead of starting its own copy.
 
 Project output hint:
 
@@ -229,6 +238,7 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 - `edit_image` treats `input_image` as the reference image and preserves subject/composition unless instructed otherwise
 - `edit_image` uses native edit endpoints for Kilo, OpenAI, and OpenRouter when possible
 - `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
+- `background_remove` can use the shared local withoutBG Docker daemon by setting `backend=withoutbg`; the daemon stays separate from the MCP process and can be reused across multiple VS Code windows
 - `background_remove` uses a local `rmbg` segmentation model by default and can switch to `imgly` for better edges
 - `finalize_image` can chain local background removal, trim, crop, resize, and flatten in one call
 - `background_remove` and `finalize_image` also produce an inspection sheet that composites the result on white, black, gray, and magenta backgrounds so fringe problems are easier to spot
