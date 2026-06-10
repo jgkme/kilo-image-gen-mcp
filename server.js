@@ -1038,9 +1038,8 @@ async function providerChatCompletion(provider, args) {
         : ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)
           ? (localEndpointBaseUrl() || 'http://127.0.0.1:8000/v1').replace(/\/$/, '')
         : 'https://generativelanguage.googleapis.com/v1beta/openai';
-  const apiKey = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)
-    ? (configuredKey('IMAGE_MCP_LOCAL_API_KEY') || 'local')
-    : requireProviderKey(provider);
+  const isLocalProvider = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider);
+  const apiKey = isLocalProvider ? configuredKey('IMAGE_MCP_LOCAL_API_KEY') : requireProviderKey(provider);
 
   const response = await axios.post(
     `${baseURL}/chat/completions`,
@@ -1051,10 +1050,11 @@ async function providerChatCompletion(provider, args) {
     },
     {
       headers: {
-        Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
+        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
         ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://github.com/jgkme/img-gen-mcp', 'X-Title': 'img-gen-mcp' } : {})
-      }
+      },
+      ...(isLocalProvider ? { timeout: localTimeoutMs() } : {})
     }
   );
 

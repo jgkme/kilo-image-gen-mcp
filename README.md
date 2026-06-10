@@ -6,7 +6,7 @@ It combines:
 - OpenRouter-first image generation
 - Kilo Gateway support
 - OpenAI and Gemini image generation
-- local image generation through OpenAI-compatible endpoints, MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
+- local image generation through OpenAI-compatible endpoints and local bridges for MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
 - local background cleanup with `rmbg`, `imgly`, and a shared Docker-backed `withoutbg` daemon
 - web optimization with `sharp`
 - deterministic prompt enhancement before generation
@@ -16,7 +16,7 @@ It combines:
 - `generate_image` for OpenRouter-first generation with response normalization
 - `kilo_generate_image` for Kilo Gateway routing
 - `edit_image` for prompt-driven image editing
-- local provider support for OpenAI-compatible endpoints and local runtimes like MLX, ComfyUI, and Draw Things
+- local provider support for OpenAI-compatible endpoints and local bridges like MLX, ComfyUI, and Draw Things
 - `background_remove` for local cutouts and the shared local withoutBG daemon
 - `resize_image` and `auto_crop` for deterministic local transforms
 - `optimize_image` for web-ready re-encoding and compression
@@ -98,6 +98,21 @@ Local examples:
 ```
 
 See `docs/public/clients.md` for ready-to-use examples for Kilo, Cursor, and generic MCP clients.
+
+## App Model Access
+
+`img-gen-mcp` cannot automatically use the image models built into Cursor, Claude Code, or Codex.
+
+It can only use a model source that is exposed to it as a separate provider or local HTTP endpoint.
+
+| Client | Use built-in app image models directly? | What works |
+|---|---|---|
+| Cursor | No | Point `IMAGE_MCP_LOCAL_ENDPOINT` at a local image server or bridge |
+| Claude Code | No | Point `IMAGE_MCP_LOCAL_ENDPOINT` at a local image server or bridge |
+| Codex | No | Point `IMAGE_MCP_LOCAL_ENDPOINT` at a local image server or bridge |
+| MLX / local server | Yes, if exposed as an endpoint | Set `IMAGE_MCP_LOCAL_PROVIDER=mlx` or `openai-compatible` |
+
+If you want a zero-cloud setup, use a local backend such as MLX-VLM on macOS or an OpenAI-compatible local server like llama.cpp, LM Studio, ComfyUI, or a Draw Things bridge.
 
 ## Workflow
 

@@ -2,6 +2,21 @@
 
 `img-gen-mcp` works with any MCP client that can launch a local stdio server and pass environment variables.
 
+## App model access
+
+The server cannot directly borrow image models that live inside Cursor, Claude Code, or Codex.
+
+Those apps must expose a separate local endpoint before `img-gen-mcp` can use them.
+
+| Client | Built-in app models | Works with `img-gen-mcp` |
+|---|---|---|
+| Cursor | No direct access | Yes, through a local endpoint or bridge |
+| Claude Code | No direct access | Yes, through a local endpoint or bridge |
+| Codex | No direct access | Yes, through a local endpoint or bridge |
+| MLX / local server | Yes, if exposed as HTTP | Yes, with `IMAGE_MCP_LOCAL_PROVIDER=mlx` |
+
+For local-only use, a bridge or endpoint is the right path: MLX-VLM on macOS, llama.cpp server mode, LM Studio, ComfyUI bridges, or Draw Things bridges.
+
 ## Kilo
 
 ```jsonc

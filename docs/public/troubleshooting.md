@@ -16,6 +16,12 @@ docker compose -f withoutbg-daemon/docker-compose.yml up -d
 - Make sure the local model server is already running.
 - If you enabled bootstrap, check that the selected runtime actually has a local launch command.
 
+## Can it use app-bundled models?
+
+- Not directly inside Cursor, Claude Code, or Codex.
+- Use a local endpoint or bridge instead.
+- If the app exposes HTTP, point `IMAGE_MCP_LOCAL_ENDPOINT` at that surface.
+
 ## Wrong local model
 
 - Set `IMAGE_MCP_LOCAL_MODEL` explicitly.
