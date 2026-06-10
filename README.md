@@ -106,6 +106,13 @@ docker compose -f withoutbg-daemon/docker-compose.yml up -d
 
 This uses OrbStack or Docker to run a single shared `withoutbg` container on `http://127.0.0.1:8765` so every VS Code project can reuse the same loaded model instead of starting its own copy.
 
+Reusable global script and command:
+
+- Shared script: `~/.local/share/kilo/scripts/background-remove-withoutbg.sh`
+- Global Kilo command: `~/.config/kilo/command/background-remove-withoutbg.md`
+
+The script accepts `input-image` and `output-image` arguments and POSTs the file to the local withoutBG daemon. Other agents can call the script directly, while Kilo can expose the same flow as a slash command through the global command file.
+
 Project output hint:
 
 - If `IMAGE_MCP_PROJECT_OUTPUT_DIR` is set, the server writes generated images there.
