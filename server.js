@@ -2,6 +2,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { execFile } from 'node:child_process';
 import FormData from 'form-data';
 import axios from 'axios';
 import sharp from 'sharp';
@@ -11,7 +12,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.3';
+const VERSION = '0.8.4';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -68,6 +69,10 @@ const server = new Server(
   { capabilities: { tools: {} } }
 );
 
+const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
+const WITHOUTBG_DAEMON_COMPOSE = path.join(SERVER_DIR, 'withoutbg-daemon', 'docker-compose.yml');
+const WITHOUTBG_DAEMON_LOCK = path.join(process.env.HOME || process.cwd(), '.local', 'share', 'kilo', 'locks', 'withoutbg.lock');
+
 function configuredKey(name) {
   const value = env(name).trim();
   return value || undefined;
@@ -100,6 +105,79 @@ async function withoutBgDaemonHealthy() {
     _cachedWithoutBgHealth = { ok: false, checkedAt: now };
     return false;
   }
+}
+
+function execFileAsync(command, args, options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, options, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+async function withDaemonLock(fn) {
+  await ensureDir(path.dirname(WITHOUTBG_DAEMON_LOCK));
+  let handle;
+  try {
+    handle = await fs.open(WITHOUTBG_DAEMON_LOCK, 'wx');
+  } catch (error) {
+    if (error?.code !== 'EEXIST') throw error;
+    return fn(false);
+  }
+
+  try {
+    await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2));
+    return await fn(true);
+  } finally {
+    try {
+      await handle.close();
+    } catch {}
+    try {
+      await fs.unlink(WITHOUTBG_DAEMON_LOCK);
+    } catch {}
+  }
+}
+
+async function startWithoutBgDaemon() {
+  await execFileAsync('docker', ['compose', '-f', WITHOUTBG_DAEMON_COMPOSE, 'up', '-d'], {
+    cwd: SERVER_DIR,
+    timeout: 120000,
+    maxBuffer: 10 * 1024 * 1024
+  });
+}
+
+async function ensureWithoutBgDaemonRunning() {
+  if (await withoutBgDaemonHealthy()) return true;
+  if (!withoutBgAutostartEnabled()) return false;
+
+  return withDaemonLock(async (haveLock) => {
+    if (await withoutBgDaemonHealthy()) return true;
+    if (haveLock) {
+      try {
+        await startWithoutBgDaemon();
+      } catch (error) {
+        throw Object.assign(new Error(`withoutBG daemon autostart failed: ${error?.message || error?.code || 'unknown error'}`), {
+          code: 'daemon_start_failed',
+          retryable: false,
+          details: { daemonUrl: withoutBgDaemonUrl(), stdout: error?.stdout, stderr: error?.stderr }
+        });
+      }
+    }
+
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      if (await withoutBgDaemonHealthy()) return true;
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
+    return false;
+  });
 }
 
 function providerKeyStatus(provider) {
@@ -150,6 +228,10 @@ function env(name) {
 
 function debugMode() {
   return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_DEBUG').toLowerCase());
+}
+
+function withoutBgAutostartEnabled() {
+  return ['1', 'true', 'yes', 'on'].includes(env('WITHOUTBG_AUTOSTART').toLowerCase());
 }
 
 function promptEnhancementEnabled() {
@@ -1169,11 +1251,11 @@ async function removeBackgroundBuffer(args) {
   }
 
   if (backend === 'withoutbg') {
-    if (!(await withoutBgDaemonHealthy())) {
-      throw Object.assign(new Error('withoutBG local daemon is not running. Start it with `docker compose -f withoutbg-daemon/docker-compose.yml up -d` or set WITHOUTBG_DAEMON_URL to your daemon URL.'), {
+    if (!(await ensureWithoutBgDaemonRunning())) {
+      throw Object.assign(new Error('withoutBG local daemon is not running. Start it with `docker compose -f withoutbg-daemon/docker-compose.yml up -d` or set WITHOUTBG_AUTOSTART=1 to let the MCP start it for you.'), {
         code: 'missing_daemon',
         retryable: false,
-        details: { daemonUrl: withoutBgDaemonUrl() }
+        details: { daemonUrl: withoutBgDaemonUrl(), autostart: withoutBgAutostartEnabled() }
       });
     }
 

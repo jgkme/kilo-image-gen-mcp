@@ -32,6 +32,7 @@ Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
 Set the default local background-removal backend with `IMAGE_MCP_DEFAULT_BG_BACKEND` (`rmbg` or `imgly`).
 Set `WITHOUTBG_DAEMON_URL` to the local daemon URL if you run the Docker-backed withoutBG service on a non-default port (defaults to `http://127.0.0.1:8765`).
+Set `WITHOUTBG_AUTOSTART=1` to let the MCP start the local withoutBG Docker daemon automatically when a request needs it.
 Set `IMAGE_MCP_DEFAULT_BG_ALPHA_THRESHOLD` to a number like `24` if you want the quality backend to default to a tighter mask for logos/header assets.
 Set `IMAGE_MCP_PROMPT_ENHANCE=0` to disable the deterministic prompt-enhancement pass, or leave it unset / set it to `1` to keep it enabled.
 Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
@@ -105,6 +106,7 @@ docker compose -f withoutbg-daemon/docker-compose.yml up -d
 ```
 
 This uses OrbStack or Docker to run a single shared `withoutbg` container on `http://127.0.0.1:8765` so every VS Code project can reuse the same loaded model instead of starting its own copy.
+If `WITHOUTBG_AUTOSTART=1`, the MCP will try to start this daemon automatically on demand and reuse the same container across all VS Code instances.
 
 Reusable global script and command:
 
