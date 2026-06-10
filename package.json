@@ -1,10 +1,10 @@
 {
-  "name": "@jgkme/kilo-image-gen-mcp",
+  "name": "img-gen-mcp",
   "version": "0.8.7",
-  "description": "MCP server for image generation and local image manipulation/finalization through Kilo Gateway and compatible providers.",
+  "description": "MCP server for image generation, local image manipulation, and web-ready finalization through compatible providers.",
   "type": "module",
   "bin": {
-    "kilo-image-gen-mcp": "./server.js"
+    "img-gen-mcp": "./server.js"
   },
   "engines": {
     "node": ">=18"
@@ -14,9 +14,16 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/jgkme/kilo-image-gen-mcp.git"
+    "url": "https://github.com/jgkme/img-gen-mcp.git"
   },
   "license": "MIT",
+  "files": [
+    "server.js",
+    "scripts/",
+    "withoutbg-daemon/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "start": "node ./server.js",
     "smoke": "node ./scripts/smoke-image.mjs",

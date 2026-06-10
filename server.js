@@ -66,7 +66,7 @@ const PROCESSING_FITS = ['cover', 'contain', 'fill', 'inside', 'outside'];
 const OPTIMIZE_FORMATS = ['png', 'webp', 'jpeg', 'jpg', 'avif'];
 
 const server = new Server(
-  { name: '@jgkme/kilo-image-gen-mcp', version: VERSION },
+  { name: 'img-gen-mcp', version: VERSION },
   { capabilities: { tools: {} } }
 );
 
@@ -727,7 +727,7 @@ async function kiloImagesGenerations(args) {
       headers: {
         Authorization: `Bearer ${requireProviderKey('kilo')}`,
         'Content-Type': 'application/json',
-        'X-KiloCode-EditorName': 'Kilo CLI'
+      'X-KiloCode-EditorName': 'img-gen-mcp'
       }
     }
   );
@@ -736,7 +736,7 @@ async function kiloImagesGenerations(args) {
   const parts = Array.isArray(content) ? content : content ? [content] : [];
   const imagePart = parts.find((part) => part?.type === 'image_url' || part?.type === 'image' || part?.image_url || part?.url || part?.b64_json || part?.data);
   const b64 = normalizeImagePart(imagePart);
-  if (!b64) throw Object.assign(new Error('Kilo image response did not include an image payload'), { retryable: false, response: response?.data });
+  if (!b64) throw Object.assign(new Error('Provider image response did not include an image payload'), { retryable: false, response: response?.data });
   const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
@@ -759,7 +759,7 @@ async function kiloImageEdits(args) {
   );
 
   const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.image?.b64_json;
-  if (!b64) throw Object.assign(new Error('Kilo edit response did not include image data'), { retryable: false, response: response?.data });
+  if (!b64) throw Object.assign(new Error('Provider edit response did not include image data'), { retryable: false, response: response?.data });
   const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
   return { type: 'image', data: b64, mimeType: 'image/png', output_path };
 }
@@ -796,8 +796,8 @@ async function openrouterImageEdits(args) {
   const response = await axios.post('https://openrouter.ai/api/v1/images/edits', form, {
     headers: {
       Authorization: `Bearer ${requireProviderKey('openrouter')}`,
-      'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp',
-      'X-Title': '@jgkme/kilo-image-gen-mcp',
+      'HTTP-Referer': 'https://github.com/jgkme/img-gen-mcp',
+      'X-Title': 'img-gen-mcp',
       ...form.getHeaders()
     }
   });
@@ -842,8 +842,8 @@ async function openrouterImagesGenerations(args) {
       headers: {
         Authorization: `Bearer ${requireProviderKey('openrouter')}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp',
-        'X-Title': '@jgkme/kilo-image-gen-mcp'
+        'HTTP-Referer': 'https://github.com/jgkme/img-gen-mcp',
+        'X-Title': 'img-gen-mcp'
       }
     }
   );
@@ -979,7 +979,7 @@ async function providerChatCompletion(provider, args) {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://github.com/jgkme/kilo-image-gen-mcp', 'X-Title': '@jgkme/kilo-image-gen-mcp' } : {})
+        ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://github.com/jgkme/img-gen-mcp', 'X-Title': 'img-gen-mcp' } : {})
       }
     }
   );
@@ -1557,7 +1557,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'kilo_generate_image',
       description:
-        'Generate an image using Kilo Gateway or a configured provider. Choose a provider by intent: default/general to black-forest-labs/flux.2-pro, fast drafts to black-forest-labs/flux.2-flex, OpenAI uses gpt-image-1, Gemini defaults to gemini-2.5-flash-image and also supports gemini-3.1-flash-image-preview and gemini-3-pro-image-preview. Provide subject, style, colors, mood, context, aspect ratio, transparency, and optional reference image.',
+        'Generate an image using the configured provider. Choose a provider by intent: default/general to black-forest-labs/flux.2-pro, fast drafts to black-forest-labs/flux.2-flex, OpenAI uses gpt-image-1, Gemini defaults to gemini-2.5-flash-image and also supports gemini-3.1-flash-image-preview and gemini-3-pro-image-preview. Provide subject, style, colors, mood, context, aspect ratio, transparency, and optional reference image.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -1787,7 +1787,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 try {
   await resolveOutputDirHint();
   validateStartup();
-  process.stderr.write(`@jgkme/kilo-image-gen-mcp v${VERSION} starting\n`);
+  process.stderr.write(`img-gen-mcp v${VERSION} starting\n`);
   await server.connect(new StdioServerTransport());
 } catch (error) {
   process.stderr.write(`${errorResult(error)}\n`);
