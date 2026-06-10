@@ -12,7 +12,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.4';
+const VERSION = '0.8.6';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -63,6 +63,7 @@ const EDIT_CAPABILITIES = {
 };
 
 const PROCESSING_FITS = ['cover', 'contain', 'fill', 'inside', 'outside'];
+const OPTIMIZE_FORMATS = ['png', 'webp', 'jpeg', 'jpg', 'avif'];
 
 const server = new Server(
   { name: '@jgkme/kilo-image-gen-mcp', version: VERSION },
@@ -1103,6 +1104,70 @@ async function saveSharpResult(image, outputPath, fallbackPrefix) {
   return target;
 }
 
+function optimizeOutputPath(outputPath, fallbackPrefix, format) {
+  if (outputPath && typeof outputPath === 'string' && outputPath.trim()) {
+    const resolved = normalizeOutputPath(outputPath, fallbackPrefix);
+    if (path.extname(resolved)) return resolved;
+    return `${resolved}.${format}`;
+  }
+  const baseDir = outputDir();
+  return path.join(baseDir, outputFileName(fallbackPrefix).replace(/\.png$/i, `.${format}`));
+}
+
+async function optimizeImage(args) {
+  const { image, metadata } = await loadSharpInput(args.input_image);
+  const hasAlpha = Boolean(metadata.hasAlpha);
+  const requestedFormat = String(args.output_format || '').toLowerCase();
+  const format = requestedFormat || (hasAlpha ? 'png' : 'webp');
+  const qualityValue = Number(args.quality);
+  const compressionValue = Number(args.compression_level);
+  const quality = Number.isFinite(qualityValue) ? Math.max(1, Math.min(100, qualityValue)) : 85;
+  const compressionLevel = Number.isFinite(compressionValue) ? Math.max(0, Math.min(9, compressionValue)) : 9;
+  const lossless = args.lossless === undefined ? format === 'png' : Boolean(args.lossless);
+  const target = optimizeOutputPath(args.output_path, 'optimize', format);
+
+  let pipeline = image.clone().rotate();
+  if (format === 'webp') {
+    pipeline = pipeline.webp({ quality, lossless, effort: 6 });
+  } else if (format === 'jpeg' || format === 'jpg') {
+    pipeline = pipeline.flatten({ background: args.background || '#ffffff' }).jpeg({ quality, mozjpeg: true });
+  } else if (format === 'avif') {
+    pipeline = pipeline.avif({ quality, effort: 6 });
+  } else {
+    pipeline = pipeline.png({ compressionLevel, adaptiveFiltering: true, palette: Boolean(args.palette) });
+  }
+
+  await ensureDir(path.dirname(target));
+  await fs.writeFile(target, await pipeline.toBuffer());
+  return {
+    type: 'image',
+    data: (await fs.readFile(target)).toString('base64'),
+    mimeType: `image/${format === 'jpg' ? 'jpeg' : format}`,
+    output_path: target,
+    bytes: (await fs.stat(target)).size,
+    action: 'optimize_image',
+    model: hasAlpha ? 'png' : format
+  };
+}
+
+function validateOptimizeArgs(args) {
+  if (!args.input_image || typeof args.input_image !== 'string') {
+    throw Object.assign(new Error('input_image is required'), { code: 'validation_error', retryable: false });
+  }
+  if (args.output_path && typeof args.output_path !== 'string') {
+    throw Object.assign(new Error('output_path must be a string'), { code: 'validation_error', retryable: false });
+  }
+  if (args.output_format && !OPTIMIZE_FORMATS.includes(String(args.output_format).toLowerCase())) {
+    throw Object.assign(new Error(`output_format must be one of ${OPTIMIZE_FORMATS.join(', ')}`), { code: 'validation_error', retryable: false });
+  }
+  if (args.quality !== undefined && (!Number.isFinite(Number(args.quality)) || Number(args.quality) < 1 || Number(args.quality) > 100)) {
+    throw Object.assign(new Error('quality must be a number between 1 and 100'), { code: 'validation_error', retryable: false });
+  }
+  if (args.compression_level !== undefined && (!Number.isFinite(Number(args.compression_level)) || Number(args.compression_level) < 0 || Number(args.compression_level) > 9)) {
+    throw Object.assign(new Error('compression_level must be a number between 0 and 9'), { code: 'validation_error', retryable: false });
+  }
+}
+
 async function saveBufferResult(buffer, outputPath, fallbackPrefix) {
   const baseDir = await ensureOutputDir();
   const target = outputPath ? normalizeOutputPath(outputPath, fallbackPrefix) : path.join(baseDir, outputFileName(fallbackPrefix));
@@ -1627,6 +1692,24 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['input_image']
       }
+    },
+    {
+      name: 'optimize_image',
+      description: 'Optimize an image for the web by re-encoding it as compressed PNG, WebP, JPEG, or AVIF with metadata stripped.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          input_image: { type: 'string' },
+          output_path: { type: 'string' },
+          output_format: { type: 'string', enum: OPTIMIZE_FORMATS },
+          quality: { type: 'number' },
+          compression_level: { type: 'number' },
+          lossless: { type: 'boolean' },
+          background: { type: 'string' },
+          palette: { type: 'boolean' }
+        },
+        required: ['input_image']
+      }
     }
   ]
 }));
@@ -1637,6 +1720,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'kilo_generate_image' || name === 'edit_image') validateArgs(args);
     if (name === 'generate_image') validateArgs(args);
     if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
+    if (name === 'optimize_image') validateOptimizeArgs(args);
     if (name === 'finalize_image') validateProcessingArgs({ ...args, backend: args.background_backend, model: args.background_model });
     if (name === 'kilo_generate_image') {
       const result = await generateImage(args);
@@ -1664,6 +1748,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     if (name === 'auto_crop') {
       const result = await autoCropImage(args);
+      return { content: imageToolContent(result) };
+    }
+    if (name === 'optimize_image') {
+      const result = await optimizeImage(args);
       return { content: imageToolContent(result) };
     }
     if (name === 'list_image_models') {

@@ -9,6 +9,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - `edit_image` for prompt-driven image editing
 - `background_remove` for local segmentation-backed transparent PNG cutouts and the shared local withoutBG daemon
 - `resize_image` and `auto_crop` for deterministic local transforms
+- `optimize_image` for web-ready re-encoding and compression
 - `finalize_image` for a one-call local workflow that can remove background, trim, crop, and resize
 - `background_remove` and `finalize_image` also emit alpha stats plus a multi-background inspection sheet for post-processing QA
 - Support for OpenAI `gpt-image-1`
@@ -17,6 +18,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - Reusable smoke validation commands for OpenRouter, OpenAI, and local background removal
 - Debug mode via `IMAGE_MCP_DEBUG=1` for full error details and response payloads
 - `background_remove`, `resize_image`, `auto_crop`, and `finalize_image` work without any provider API key
+- `optimize_image` can re-encode assets as PNG, WebP, JPEG, or AVIF with metadata stripped so final outputs are smaller for web delivery
 - The smoke harness prints compact summaries by default; add `--json` or `--verbose` when you need raw output
 
 ## Install
@@ -233,6 +235,27 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 | `width` / `height` | number | Optional crop target |
 | `gravity` | string | Optional crop gravity |
 | `output_path` | string | Optional output file path |
+
+### `optimize_image`
+
+Re-encodes an image for the web with metadata stripped.
+
+| Input | Type | Notes |
+|---|---|---|
+| `input_image` | string | Required |
+| `output_path` | string | Optional output file |
+| `output_format` | string | Optional: `png`, `webp`, `jpeg`, `jpg`, or `avif` |
+| `quality` | number | Optional 1-100 quality control for WebP/JPEG/AVIF |
+| `compression_level` | number | Optional 0-9 PNG compression level |
+| `lossless` | boolean | Optional WebP lossless toggle |
+| `background` | string | Optional flatten color for JPEG output |
+| `palette` | boolean | Optional PNG palette mode |
+
+Behavior:
+
+- If `output_format` is omitted, transparent images stay PNG and opaque images default to WebP.
+- Use `output_path` with an extension to control the filename exactly.
+- Good for making the final generated asset smaller before shipping it to the web.
 
 ## Behavior
 
