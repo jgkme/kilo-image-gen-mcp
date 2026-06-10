@@ -10,6 +10,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - `background_remove` for local segmentation-backed transparent PNG cutouts
 - `resize_image` and `auto_crop` for deterministic local transforms
 - `finalize_image` for a one-call local workflow that can remove background, trim, crop, and resize
+- `background_remove` and `finalize_image` also emit alpha stats plus a multi-background inspection sheet for post-processing QA
 - Support for OpenAI `gpt-image-1`
 - Gemini support for `gemini-2.5-flash-image`, `gemini-3.1-flash-image-preview`, and `gemini-3-pro-image-preview`
 - Global Kilo skills for generation, editing, background removal, and transforms
@@ -31,6 +32,7 @@ Set the default model with `IMAGE_MCP_DEFAULT_MODEL`.
 Set a project-specific image output root with `IMAGE_MCP_PROJECT_OUTPUT_DIR`.
 Set the default local background-removal backend with `IMAGE_MCP_DEFAULT_BG_BACKEND` (`rmbg` or `imgly`).
 Set `IMAGE_MCP_DEFAULT_BG_ALPHA_THRESHOLD` to a number like `24` if you want the quality backend to default to a tighter mask for logos/header assets.
+Set `IMAGE_MCP_PROMPT_ENHANCE=0` to disable the deterministic prompt-enhancement pass, or leave it unset / set it to `1` to keep it enabled.
 Set `IMAGE_MCP_DEBUG=1` to include full error details, provider response payloads, and stack traces in MCP error output.
 The local transform tools, background removal, and finalize workflow do not require provider keys. Only generation and edit routes need API keys.
 
@@ -91,6 +93,10 @@ OpenRouter-first image generation tool with broader request options and response
 
 OpenRouter responses are normalized from `choices[0].message.images`, `message.content`, `data.output`, and other common image payload shapes. Multiple returned images are preserved.
 
+OpenRouter image models that are explicitly supported in this repo include `google/gemini-2.5-flash-image`, `google/gemini-3-pro-image-preview`, `openai/gpt-image-1`, `openai/gpt-5.4-image-2`, `microsoft/mai-image-2.5`, `x-ai/grok-imagine-image-quality`, `bytedance-seed/seedream-4.5`, `sourceful/riverflow-v2.5-fast:free`, `sourceful/riverflow-v2.5-fast`, `sourceful/riverflow-v2.5-pro`, `recraft/recraft-v4.1-utility`, `recraft/recraft-v4.1-vector`, `recraft/recraft-v4.1-utility-pro`, and `recraft/recraft-v4.1-pro-vector`, plus the Flux and older Riverflow families listed in `server.js`.
+
+The server also applies a small deterministic prompt-enhancement pass before generation. It expands short prompts with intent-aware hints for logos, icons, headers, vector marks, photorealism, and quality targets so clients can stay concise while the provider receives a richer prompt. Disable it with `IMAGE_MCP_PROMPT_ENHANCE=0` if you want raw prompts only.
+
 Project output hint:
 
 - If `IMAGE_MCP_PROJECT_OUTPUT_DIR` is set, the server writes generated images there.
@@ -137,13 +143,21 @@ Locally removes a background with a segmentation model and preserves transparenc
 
 If `backend` is omitted, the server uses `IMAGE_MCP_DEFAULT_BG_BACKEND` when set, otherwise `rmbg`.
 
+The response includes:
+
+- `alpha`: basic alpha-channel stats for the output PNG
+- `inspection_path`: a contact-sheet PNG that previews the cutout on white, black, gray, and magenta backgrounds
+
+Use the inspection sheet to catch halos and edge contamination the same way production workflows do: test the same cutout on multiple backgrounds before shipping it.
+
 Backend notes:
 
 - `rmbg` is the fast default and uses `u2netp`, `modnet`, or `briaai`
 - `imgly` is the higher-quality path and uses `small` or `medium`
 - Both backends run locally and do not need API keys
 - Expect the quality backend to use more RAM and disk for model assets
-- For logo/header artwork, a threshold like `24` often removes leftover white halo pixels better than the raw output
+- For logo/header artwork, an explicit threshold like `24` can remove leftover white halo pixels better than the raw output, but do not enable it blindly on thin line art or icons
+- The server applies a light edge-bleed pass only to semi-transparent pixels in the low-alpha fringe band before any optional alpha thresholding, which helps remove thin white fringes without shrinking the opaque core
 
 Resource notes:
 
@@ -173,9 +187,11 @@ One-call local workflow for cleanup and export.
 
 Typical use: remove the background from a logo or product shot, then trim or resize it in the same call.
 
+The response includes the same `alpha` stats and `inspection_path` preview sheet as `background_remove` when the output still contains transparency.
+
 If `background_backend` is omitted, the server uses `IMAGE_MCP_DEFAULT_BG_BACKEND` when set, otherwise `rmbg`.
 
-If you still see tiny edge residue after removal, try a small `alpha_feather` value like `0.4` to `0.8` or a mild `alpha_threshold` like `8` to `20`.
+If you still see tiny edge residue after removal, try a small `alpha_feather` value like `0.4` to `0.8` or pass a mild `alpha_threshold` like `8` to `20` explicitly.
 
 ### `resize_image`
 
@@ -215,8 +231,10 @@ Locally crops to target dimensions or trims surrounding whitespace when no size 
 - `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
 - `background_remove` uses a local `rmbg` segmentation model by default and can switch to `imgly` for better edges
 - `finalize_image` can chain local background removal, trim, crop, resize, and flatten in one call
+- `background_remove` and `finalize_image` also produce an inspection sheet that composites the result on white, black, gray, and magenta backgrounds so fringe problems are easier to spot
+- If that sheet shows obvious scanline, hatch, or banding texture, treat it as a source-image quality failure and regenerate the asset instead of trying to blame the alpha pass
 - `IMAGE_MCP_DEBUG=1` expands tool error output with `details`, `response`, and `stack`
-- If a generated image still contains checkerboard-like residue in the background, use `background_backend=imgly` and `finalize_image` first; deeper alpha cleanup would require refinement knobs
+- If a generated image still contains fringe or matte residue, use `background_backend=imgly`, then inspect the `inspection_path` sheet on multiple backgrounds before shipping; deeper alpha cleanup would require refinement knobs
 
 ## Smoke tests
 

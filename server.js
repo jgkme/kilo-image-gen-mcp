@@ -11,7 +11,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.0';
+const VERSION = '0.8.1';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -31,14 +31,23 @@ const KNOWN_MODELS = {
   openrouter: [
     'black-forest-labs/flux.2-pro',
     'black-forest-labs/flux.2-flex',
+    'microsoft/mai-image-2.5',
     'google/gemini-2.5-flash-image',
     'google/gemini-2.5-flash-image-preview',
     'google/gemini-3-pro-image-preview',
     'openai/gpt-image-1',
+    'openai/gpt-5.4-image-2',
+    'x-ai/grok-imagine-image-quality',
     'sourceful/riverflow-v2-fast',
     'sourceful/riverflow-v2-pro',
+    'sourceful/riverflow-v2.5-fast:free',
     'sourceful/riverflow-v2.5-fast',
     'sourceful/riverflow-v2.5-pro',
+    'bytedance-seed/seedream-4.5',
+    'recraft/recraft-v4.1-utility',
+    'recraft/recraft-v4.1-vector',
+    'recraft/recraft-v4.1-utility-pro',
+    'recraft/recraft-v4.1-pro-vector',
     'recraft/recraft-v3'
   ],
   openai: ['gpt-image-1'],
@@ -120,6 +129,12 @@ function env(name) {
 
 function debugMode() {
   return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_DEBUG').toLowerCase());
+}
+
+function promptEnhancementEnabled() {
+  const value = env('IMAGE_MCP_PROMPT_ENHANCE').trim().toLowerCase();
+  if (!value) return true;
+  return ['1', 'true', 'yes', 'on'].includes(value);
 }
 
 function backgroundRemoveBackend(value) {
@@ -250,7 +265,7 @@ function providerQuality(provider, args = {}) {
 function modalitiesForModel(provider, model, requestedModalities) {
   if (Array.isArray(requestedModalities) && requestedModalities.length) return requestedModalities;
   if (provider === 'openrouter') {
-    const imageOnlyModels = ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex', 'sourceful/riverflow-v2-fast', 'sourceful/riverflow-v2-pro', 'sourceful/riverflow-v2.5-fast', 'sourceful/riverflow-v2.5-pro', 'recraft/recraft-v3'];
+    const imageOnlyModels = ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex', 'x-ai/grok-imagine-image-quality', 'bytedance-seed/seedream-4.5', 'sourceful/riverflow-v2-fast', 'sourceful/riverflow-v2-pro', 'recraft/recraft-v3'];
     if (imageOnlyModels.includes(model)) return ['image'];
     return ['image', 'text'];
   }
@@ -282,6 +297,36 @@ function promptWithAspect(args) {
   if (args.quality) segments.push(`Quality target: ${args.quality}.`);
   if (args.style) segments.push(`Style: ${args.style}.`);
   if (args.steps) segments.push(`Generation steps: ${args.steps}.`);
+  if (promptEnhancementEnabled()) {
+    const promptHints = [];
+    const purpose = String(args.purpose || '').toLowerCase();
+    const style = String(args.style || '').toLowerCase();
+    const quality = String(args.quality || '').toLowerCase();
+
+    if (purpose.includes('logo') || purpose.includes('icon') || purpose.includes('brand')) {
+      promptHints.push('Design it as a clean, recognizable mark with crisp edges, simple geometry, and strong negative space.');
+    }
+    if (purpose.includes('header') || purpose.includes('banner')) {
+      promptHints.push('Compose it with extra breathing room and a clear focal point so it reads well in a website header.');
+    }
+    if (style.includes('photoreal') || style.includes('realistic') || style.includes('realism')) {
+      promptHints.push('Use natural lighting, believable materials, and realistic surface detail without over-sharpening.');
+    }
+    if (style.includes('vector') || style.includes('flat') || style.includes('minimal')) {
+      promptHints.push('Keep the rendering flat, structured, and icon-friendly with limited gradients and no texture noise.');
+    }
+    if (quality === 'quality') {
+      promptHints.push('Prioritize detail fidelity, clean composition, and artifact-free edges.');
+    }
+    if (quality === 'balanced') {
+      promptHints.push('Balance visual quality with clarity and avoid unnecessary complexity.');
+    }
+    if (quality === 'fast') {
+      promptHints.push('Keep the composition simple so the result stays readable at lower compute budgets.');
+    }
+
+    if (promptHints.length) segments.push(`Enhance prompt: ${promptHints.join(' ')}`);
+  }
   segments.push(args.prompt);
   return segments.join(' ').trim();
 }
@@ -344,6 +389,11 @@ function uniqueOutputPath(outputPath, suffix) {
   const ext = path.extname(resolved);
   const base = resolved.slice(0, resolved.length - ext.length);
   return `${base}${suffix}${ext || '.png'}`;
+}
+
+function inspectionOutputPath(outputPath, fallbackPrefix = 'image') {
+  if (outputPath) return uniqueOutputPath(outputPath, '-inspect');
+  return path.join(outputDir(), outputFileName(`${fallbackPrefix}-inspect`));
 }
 
 function outputFileName(prefix = 'image') {
@@ -860,6 +910,87 @@ async function loadSharpInput(input) {
   return { image, metadata };
 }
 
+async function alphaQualityStats(buffer) {
+  const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let semi = 0;
+  let opaque = 0;
+  let transparent = 0;
+  let minA = 255;
+  let maxA = 0;
+  let transparentRgbResidue = 0;
+
+  for (let i = 0; i < data.length; i += info.channels) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const a = data[i + info.channels - 1];
+
+    if (a === 0) {
+      transparent += 1;
+      if (r !== 0 || g !== 0 || b !== 0) transparentRgbResidue += 1;
+    } else if (a === 255) {
+      opaque += 1;
+    } else {
+      semi += 1;
+    }
+
+    if (a < minA) minA = a;
+    if (a > maxA) maxA = a;
+  }
+
+  return {
+    width: info.width,
+    height: info.height,
+    minA,
+    maxA,
+    semi,
+    opaque,
+    transparent,
+    transparentRgbResidue,
+    hasAlpha: transparent > 0 || semi > 0
+  };
+}
+
+async function buildTransparencyInspectionSheet(buffer) {
+  const MAX_TILE = 640;
+  const backgrounds = ['#ffffff', '#111111', '#808080', '#ff00ff'];
+  const preview = sharp(buffer, { failOn: 'none' }).rotate().resize({ width: MAX_TILE, height: MAX_TILE, fit: 'inside', withoutEnlargement: true });
+  const previewBuffer = await preview.png().toBuffer();
+  const previewMeta = await sharp(previewBuffer).metadata();
+  const previewWidth = previewMeta.width || MAX_TILE;
+  const previewHeight = previewMeta.height || MAX_TILE;
+  const offsetLeft = Math.max(0, Math.floor((MAX_TILE - previewWidth) / 2));
+  const offsetTop = Math.max(0, Math.floor((MAX_TILE - previewHeight) / 2));
+
+  const tiles = await Promise.all(
+    backgrounds.map(async (background) =>
+      sharp({ create: { width: MAX_TILE, height: MAX_TILE, channels: 4, background } })
+        .composite([{ input: previewBuffer, left: offsetLeft, top: offsetTop }])
+        .png()
+        .toBuffer()
+    )
+  );
+
+  return sharp({ create: { width: MAX_TILE * 2, height: MAX_TILE * 2, channels: 4, background: '#1b1b1b' } })
+    .composite([
+      { input: tiles[0], left: 0, top: 0 },
+      { input: tiles[1], left: MAX_TILE, top: 0 },
+      { input: tiles[2], left: 0, top: MAX_TILE },
+      { input: tiles[3], left: MAX_TILE, top: MAX_TILE }
+    ])
+    .png()
+    .toBuffer();
+}
+
+async function saveTransparencyInspectionSheet(buffer, outputPath, fallbackPrefix) {
+  const baseDir = await ensureOutputDir();
+  const target = outputPath ? inspectionOutputPath(outputPath) : path.join(baseDir, outputFileName(`${fallbackPrefix}-inspect`));
+  await ensureDir(path.dirname(target));
+  const sheet = await buildTransparencyInspectionSheet(buffer);
+  await fs.writeFile(target, sheet);
+  return target;
+}
+
 async function saveSharpResult(image, outputPath, fallbackPrefix) {
   const baseDir = await ensureOutputDir();
   const target = outputPath ? normalizeOutputPath(outputPath, fallbackPrefix) : path.join(baseDir, outputFileName(fallbackPrefix));
@@ -877,15 +1008,98 @@ async function saveBufferResult(buffer, outputPath, fallbackPrefix) {
   return target;
 }
 
+async function defringeAlphaBuffer(buffer, args = {}) {
+  const radius = Math.max(1, Math.min(6, Number(args.defringe_radius || 3)));
+  const opaqueCutoff = Math.max(1, Math.min(254, Number(args.defringe_opaque_cutoff || 240)));
+  const edgeAlphaMax = Math.max(1, Math.min(254, Number(args.defringe_edge_alpha_max || 245)));
+  const fringeLumaMin = Math.max(0, Math.min(255, Number(args.defringe_fringe_luma_min || 0)));
+  const alphaContract = Math.max(0, Math.min(0.25, Number(args.defringe_alpha_contract || 0.04)));
+  const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const width = info.width;
+  const height = info.height;
+  const out = Buffer.from(data);
+  const channels = info.channels;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const idx = (y * width + x) * channels;
+      const alpha = data[idx + 3];
+      if (alpha <= 0) {
+        out[idx] = 0;
+        out[idx + 1] = 0;
+        out[idx + 2] = 0;
+        continue;
+      }
+      if (alpha >= 255) continue;
+      if (alpha > edgeAlphaMax) continue;
+
+      const luma = Math.round(0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]);
+      if (luma < fringeLumaMin) continue;
+
+      let touchesEdgeBand = false;
+      for (let oy = -2; oy <= 2 && !touchesEdgeBand; oy += 1) {
+        const ny = y + oy;
+        if (ny < 0 || ny >= height) continue;
+        for (let ox = -2; ox <= 2; ox += 1) {
+          const nx = x + ox;
+          if (nx < 0 || nx >= width || (ox === 0 && oy === 0)) continue;
+          const nidx = (ny * width + nx) * channels;
+          if (data[nidx + 3] < 255) {
+            touchesEdgeBand = true;
+            break;
+          }
+        }
+      }
+
+      if (!touchesEdgeBand) continue;
+
+      let bestDistance = Number.POSITIVE_INFINITY;
+      let bestLuma = Number.POSITIVE_INFINITY;
+      let bestAlpha = -1;
+      let bestR = data[idx];
+      let bestG = data[idx + 1];
+      let bestB = data[idx + 2];
+
+      for (let oy = -radius; oy <= radius; oy += 1) {
+        const ny = y + oy;
+        if (ny < 0 || ny >= height) continue;
+        for (let ox = -radius; ox <= radius; ox += 1) {
+          const nx = x + ox;
+          if (nx < 0 || nx >= width || (ox === 0 && oy === 0)) continue;
+          const nidx = (ny * width + nx) * channels;
+          const na = data[nidx + 3];
+          if (na < opaqueCutoff) continue;
+          const nluma = Math.round(0.2126 * data[nidx] + 0.7152 * data[nidx + 1] + 0.0722 * data[nidx + 2]);
+          const distance = ox * ox + oy * oy;
+          if (nluma < bestLuma || (nluma === bestLuma && (na > bestAlpha || (na === bestAlpha && distance < bestDistance)))) {
+            bestLuma = nluma;
+            bestAlpha = na;
+            bestDistance = distance;
+            bestR = data[nidx];
+            bestG = data[nidx + 1];
+            bestB = data[nidx + 2];
+          }
+        }
+      }
+
+      if (Number.isFinite(bestDistance)) {
+        out[idx] = bestR;
+        out[idx + 1] = bestG;
+        out[idx + 2] = bestB;
+        if (alpha <= 160) {
+          out[idx + 3] = Math.max(0, Math.round(alpha * (1 - alphaContract)));
+        }
+      }
+    }
+  }
+
+  return sharp(out, { raw: { width, height, channels } }).png().toBuffer();
+}
+
 async function refineAlphaBuffer(buffer, args = {}) {
   const backend = String(args.backend || args.background_backend || '').toLowerCase();
   const feather = Number(args.alpha_feather || 0);
-  const threshold =
-    args.alpha_threshold === undefined
-      ? backend === 'imgly'
-        ? Number(env('IMAGE_MCP_DEFAULT_BG_ALPHA_THRESHOLD') || 24)
-        : undefined
-      : Number(args.alpha_threshold);
+  const threshold = args.alpha_threshold === undefined ? undefined : Number(args.alpha_threshold);
   if ((!Number.isFinite(feather) || feather <= 0) && threshold === undefined) return buffer;
 
   const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
@@ -973,8 +1187,11 @@ async function autoCropImage(args) {
 
 async function backgroundRemoveImage(args) {
   const { buffer: outputBuffer, backend, model } = await removeBackgroundBuffer(args);
-  const refinedBuffer = await refineAlphaBuffer(outputBuffer, { ...args, backend });
+  const defringedBuffer = await defringeAlphaBuffer(outputBuffer, args);
+  const refinedBuffer = await refineAlphaBuffer(defringedBuffer, { ...args, backend });
   const output_path = await saveBufferResult(refinedBuffer, args.output_path, 'background-remove');
+  const alpha = await alphaQualityStats(refinedBuffer);
+  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(refinedBuffer, output_path || args.output_path, 'background-remove') : undefined;
   return {
     type: 'image',
     data: refinedBuffer.toString('base64'),
@@ -983,6 +1200,8 @@ async function backgroundRemoveImage(args) {
     bytes: refinedBuffer.length,
     backend,
     model,
+    alpha,
+    inspection_path,
     action: 'background_remove'
   };
 }
@@ -1022,9 +1241,11 @@ async function finalizeImage(args) {
   }
 
   const output_path = await saveSharpResult(pipeline, args.output_path, 'finalize');
-  const outputBuffer = await refineAlphaBuffer(await fs.readFile(output_path), { ...args, backend: backgroundInfo?.backend, background_backend: backgroundInfo?.backend });
+  const outputBuffer = await refineAlphaBuffer(await defringeAlphaBuffer(await fs.readFile(output_path), args), { ...args, backend: backgroundInfo?.backend, background_backend: backgroundInfo?.backend });
   await fs.writeFile(output_path, outputBuffer);
   const outputMetadata = await sharp(outputBuffer, { failOn: 'none' }).metadata();
+  const alpha = await alphaQualityStats(outputBuffer);
+  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(outputBuffer, output_path || args.output_path, 'finalize') : undefined;
   return {
     type: 'image',
     data: outputBuffer.toString('base64'),
@@ -1035,6 +1256,8 @@ async function finalizeImage(args) {
     height: outputMetadata.height || metadata.height,
     backend: backgroundInfo?.backend,
     model: backgroundInfo?.model,
+    alpha,
+    inspection_path,
     action: 'finalize_image'
   };
 }
