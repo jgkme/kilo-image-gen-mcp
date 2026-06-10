@@ -10,4 +10,4 @@ It was built to cover the full flow from prompt to web-ready file:
 4. optimize the final asset for web delivery
 5. save the output locally
 
-The server supports OpenRouter, Kilo Gateway, OpenAI, Gemini, and local background-removal backends. It is designed for practical production work such as logos, icons, headers, product imagery, and subject cutouts.
+The server supports OpenRouter, Kilo Gateway, OpenAI, Gemini, and local backends including OpenAI-compatible HTTP servers, MLX-VLM, ComfyUI, Draw Things, and llama.cpp-compatible endpoints. It is designed for practical production work such as logos, icons, headers, product imagery, subject cutouts, and local-model experiments on a laptop or desktop.

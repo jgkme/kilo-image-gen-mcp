@@ -18,6 +18,14 @@
 - Best for difficult edges like fur, hair, and transparency-heavy subjects
 - Reuses one model load across all VS Code / Kilo instances on the machine
 
+## Local generation backends
+
+- `openai-compatible` - any local server exposing `/v1/chat/completions` or similar OpenAI-style endpoints
+- `mlx` - MLX-VLM on macOS
+- `comfyui` - ComfyUI with a local HTTP workflow endpoint
+- `drawthings` - Draw Things on macOS
+- `llama.cpp` - local server mode on PC/Linux
+
 ## Shared daemon setup
 
 ```bash

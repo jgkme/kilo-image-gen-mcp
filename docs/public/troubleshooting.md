@@ -10,9 +10,16 @@ docker compose -f withoutbg-daemon/docker-compose.yml up -d
 
 - Or set `WITHOUTBG_AUTOSTART=1` in the MCP environment.
 
-## Wrong default model
+## Local provider is not reachable
 
-- Set `IMAGE_MCP_DEFAULT_MODEL` explicitly in the client environment.
+- Verify `IMAGE_MCP_LOCAL_ENDPOINT` is correct.
+- Make sure the local model server is already running.
+- If you enabled bootstrap, check that the selected runtime actually has a local launch command.
+
+## Wrong local model
+
+- Set `IMAGE_MCP_LOCAL_MODEL` explicitly.
+- Make sure the model slug matches the runtime wrapper.
 
 ## Provider auth issues
 

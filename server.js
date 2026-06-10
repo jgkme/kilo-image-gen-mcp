@@ -26,7 +26,7 @@ const DEFAULT_MODEL_BY_PROVIDER = {
 const BACKGROUND_REMOVE_BACKENDS = ['rmbg', 'imgly', 'withoutbg'];
 const BACKGROUND_REMOVE_MODELS = ['u2netp', 'modnet', 'briaai'];
 const IMGLY_BACKGROUND_REMOVE_MODELS = ['small', 'medium'];
-const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini'];
+const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini', 'openai-compatible', 'comfyui', 'drawthings', 'mlx'];
 const KNOWN_MODELS = {
   kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
   openrouter: [
@@ -52,14 +52,22 @@ const KNOWN_MODELS = {
     'recraft/recraft-v3'
   ],
   openai: ['gpt-image-1'],
-  gemini: ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview']
+  gemini: ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'],
+  'openai-compatible': ['gpt-image-1'],
+  comfyui: ['comfyui-local'],
+  drawthings: ['drawthings-local'],
+  mlx: ['mlx-vlm']
 };
 
 const EDIT_CAPABILITIES = {
   kilo: true,
   openrouter: true,
   openai: true,
-  gemini: false
+  gemini: false,
+  'openai-compatible': true,
+  comfyui: true,
+  drawthings: true,
+  mlx: true
 };
 
 const PROCESSING_FITS = ['cover', 'contain', 'fill', 'inside', 'outside'];
@@ -84,7 +92,33 @@ function providerKey(provider) {
   if (provider === 'openrouter') return configuredKey('OPENROUTER_API_KEY');
   if (provider === 'openai') return configuredKey('OPENAI_API_KEY');
   if (provider === 'gemini') return configuredKey('GEMINI_API_KEY');
+  if (provider === 'openai-compatible' || provider === 'comfyui' || provider === 'drawthings' || provider === 'mlx') return configuredKey('IMAGE_MCP_LOCAL_API_KEY');
   return undefined;
+}
+
+function localProviderMode() {
+  return String(env('IMAGE_MCP_LOCAL_PROVIDER') || '').trim().toLowerCase();
+}
+
+function localEndpointBaseUrl() {
+  return String(env('IMAGE_MCP_LOCAL_ENDPOINT') || '').trim() || undefined;
+}
+
+function localModelName() {
+  return String(env('IMAGE_MCP_LOCAL_MODEL') || '').trim() || undefined;
+}
+
+function localTimeoutMs() {
+  const value = Number(env('IMAGE_MCP_LOCAL_TIMEOUT_MS') || '');
+  return Number.isFinite(value) && value > 0 ? value : 120000;
+}
+
+function localAutostartEnabled() {
+  return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_LOCAL_AUTOSTART').trim().toLowerCase());
+}
+
+function localBootstrapEnabled() {
+  return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_LOCAL_BOOTSTRAP').trim().toLowerCase());
 }
 
 function withoutBgDaemonUrl() {
@@ -188,6 +222,28 @@ function providerKeyStatus(provider) {
     configured: true,
     length: value.length,
     preview: `${value.slice(0, 4)}...${value.slice(-2)}`
+  };
+}
+
+function localProviderStatus(provider) {
+  const selected = localProviderFrom();
+  return {
+    configured: selected === provider,
+    endpoint: localEndpointBaseUrl() || undefined,
+    model: localModelName() || undefined,
+    autostart: localAutostartEnabled(),
+    bootstrap: localBootstrapEnabled()
+  };
+}
+
+function localRuntimeStatus() {
+  return {
+    provider: localProviderFrom() || undefined,
+    endpoint: localEndpointBaseUrl() || undefined,
+    model: localModelName() || undefined,
+    timeoutMs: localTimeoutMs(),
+    autostart: localAutostartEnabled(),
+    bootstrap: localBootstrapEnabled()
   };
 }
 
@@ -323,6 +379,11 @@ function providerFrom(value) {
   return PROVIDERS.includes(provider) ? provider : 'kilo';
 }
 
+function localProviderFrom() {
+  const provider = localProviderMode();
+  return ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider) ? provider : undefined;
+}
+
 function defaultModel(provider) {
   const configured = env('IMAGE_MCP_DEFAULT_MODEL').trim();
   return configured || DEFAULT_MODEL_BY_PROVIDER[provider] || DEFAULT_MODEL;
@@ -335,6 +396,7 @@ function modelFor(provider, model) {
 
 function imageModelFor(provider, args = {}) {
   if (args.model) return args.model;
+  if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return localModelName() || DEFAULT_MODEL;
   if (provider === 'gemini') {
     const quality = String(args.quality || '').toLowerCase();
     if (quality === 'quality') return 'gemini-3-pro-image-preview';
@@ -349,6 +411,14 @@ function imageModelFor(provider, args = {}) {
   }
   if (provider === 'openai') return 'gpt-image-1';
   return defaultModel(provider);
+}
+
+function localProviderLabel(provider) {
+  if (provider === 'openai-compatible') return 'OpenAI-compatible local endpoint';
+  if (provider === 'comfyui') return 'ComfyUI';
+  if (provider === 'drawthings') return 'Draw Things';
+  if (provider === 'mlx') return 'MLX-VLM';
+  return 'local provider';
 }
 
 function normalizedQuality(args = {}) {
@@ -965,8 +1035,12 @@ async function providerChatCompletion(provider, args) {
       ? 'https://openrouter.ai/api/v1'
       : provider === 'openai'
         ? 'https://api.openai.com/v1'
+        : ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)
+          ? (localEndpointBaseUrl() || 'http://127.0.0.1:8000/v1').replace(/\/$/, '')
         : 'https://generativelanguage.googleapis.com/v1beta/openai';
-  const apiKey = requireProviderKey(provider);
+  const apiKey = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)
+    ? (configuredKey('IMAGE_MCP_LOCAL_API_KEY') || 'local')
+    : requireProviderKey(provider);
 
   const response = await axios.post(
     `${baseURL}/chat/completions`,
@@ -1497,6 +1571,7 @@ async function generateImage(args) {
   if (provider === 'openrouter') return openrouterImagesGenerations(args);
   if (provider === 'openai') return openaiImageGenerations(args);
   if (provider === 'gemini') return geminiImageGenerations(args);
+  if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return providerChatCompletion(provider, args);
   return providerChatCompletion(provider, args);
 }
 
@@ -1507,7 +1582,11 @@ async function listImageModels() {
       kilo: { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations', generate: true, edit: true },
       openrouter: { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions', generate: true, edit: true },
       openai: { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions', generate: true, edit: true },
-      gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false }
+      gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false },
+      'openai-compatible': localProviderStatus('openai-compatible'),
+      comfyui: localProviderStatus('comfyui'),
+      drawthings: localProviderStatus('drawthings'),
+      mlx: localProviderStatus('mlx')
     },
     models: KNOWN_MODELS,
     outputDir: outputDir(),
@@ -1547,7 +1626,15 @@ async function getProviderStatus() {
     runtime: {
       defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined,
       defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined,
-      outputDir: outputDir()
+      outputDir: outputDir(),
+      local: {
+        provider: localProviderFrom() || undefined,
+        endpoint: localEndpointBaseUrl() || undefined,
+        model: localModelName() || undefined,
+        timeoutMs: localTimeoutMs(),
+        autostart: localAutostartEnabled(),
+        bootstrap: localBootstrapEnabled()
+      }
     }
   };
 }

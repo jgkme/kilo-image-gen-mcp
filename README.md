@@ -6,6 +6,7 @@ It combines:
 - OpenRouter-first image generation
 - Kilo Gateway support
 - OpenAI and Gemini image generation
+- local image generation through OpenAI-compatible endpoints, MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
 - local background cleanup with `rmbg`, `imgly`, and a shared Docker-backed `withoutbg` daemon
 - web optimization with `sharp`
 - deterministic prompt enhancement before generation
@@ -15,6 +16,7 @@ It combines:
 - `generate_image` for OpenRouter-first generation with response normalization
 - `kilo_generate_image` for Kilo Gateway routing
 - `edit_image` for prompt-driven image editing
+- local provider support for OpenAI-compatible endpoints and local runtimes like MLX, ComfyUI, and Draw Things
 - `background_remove` for local cutouts and the shared local withoutBG daemon
 - `resize_image` and `auto_crop` for deterministic local transforms
 - `optimize_image` for web-ready re-encoding and compression
@@ -44,6 +46,16 @@ Set these environment variables in your MCP client:
 - `IMAGE_MCP_PROMPT_ENHANCE=0` - disable deterministic prompt enhancement
 - `IMAGE_MCP_DEBUG=1` - include detailed tool errors and provider payloads
 
+Local model environment variables:
+
+- `IMAGE_MCP_LOCAL_PROVIDER` - selects `openai-compatible`, `comfyui`, `drawthings`, or `mlx`
+- `IMAGE_MCP_LOCAL_ENDPOINT` - local HTTP base URL
+- `IMAGE_MCP_LOCAL_MODEL` - local model slug
+- `IMAGE_MCP_LOCAL_AUTOSTART=1` - opt-in local service startup
+- `IMAGE_MCP_LOCAL_BOOTSTRAP=1` - opt-in bootstrap helper mode
+- `IMAGE_MCP_LOCAL_TIMEOUT_MS` - request timeout for local endpoints
+- `IMAGE_MCP_LOCAL_API_KEY` - optional local auth token
+
 Example MCP config:
 
 ```jsonc
@@ -59,6 +71,26 @@ Example MCP config:
         "IMAGE_MCP_DEFAULT_BG_BACKEND": "imgly",
         "WITHOUTBG_DAEMON_URL": "http://127.0.0.1:8765",
         "WITHOUTBG_AUTOSTART": "1"
+      }
+    }
+  }
+}
+```
+
+Local examples:
+
+```jsonc
+{
+  "mcp": {
+    "img-gen-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "img-gen-mcp"],
+      "enabled": true,
+      "environment": {
+        "IMAGE_MCP_LOCAL_PROVIDER": "mlx",
+        "IMAGE_MCP_LOCAL_ENDPOINT": "http://127.0.0.1:8000/v1",
+        "IMAGE_MCP_LOCAL_MODEL": "qwen3.5",
+        "IMAGE_MCP_LOCAL_AUTOSTART": "1"
       }
     }
   }

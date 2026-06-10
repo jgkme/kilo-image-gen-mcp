@@ -80,11 +80,15 @@ const prompt = args.prompt || 'a colorful parrot perched on a branch, simple bac
 const outputPath = args.output || `generated-images/${provider}-${tool}.png`;
 const jsonOutput = Boolean(args.json);
 const verbose = Boolean(args.verbose);
+const localEndpoint = args.local_endpoint || process.env.IMAGE_MCP_LOCAL_ENDPOINT;
 
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 try { await fs.unlink(outputPath); } catch {}
 
 const env = { ...process.env };
+if (localEndpoint) env.IMAGE_MCP_LOCAL_ENDPOINT = localEndpoint;
+if (args.local_provider) env.IMAGE_MCP_LOCAL_PROVIDER = String(args.local_provider);
+if (args.local_model) env.IMAGE_MCP_LOCAL_MODEL = String(args.local_model);
 const child = spawn('node', ['./server.js'], { cwd: process.cwd(), env });
 const rpc = rpcClient(child, verbose);
 

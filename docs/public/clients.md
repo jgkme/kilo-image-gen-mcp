@@ -57,6 +57,27 @@
 }
 ```
 
+## Local MLX client example
+
+```jsonc
+{
+  "mcp": {
+    "img-gen-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "img-gen-mcp"],
+      "enabled": true,
+      "environment": {
+        "IMAGE_MCP_LOCAL_PROVIDER": "mlx",
+        "IMAGE_MCP_LOCAL_ENDPOINT": "http://127.0.0.1:8000/v1",
+        "IMAGE_MCP_LOCAL_MODEL": "qwen3.5",
+        "IMAGE_MCP_LOCAL_AUTOSTART": "1",
+        "IMAGE_MCP_LOCAL_BOOTSTRAP": "1"
+      }
+    }
+  }
+}
+```
+
 ## Notes
 
 - Some clients use `environment` instead of `env`.

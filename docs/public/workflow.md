@@ -11,6 +11,8 @@ generate -> background_remove/finalize -> inspect -> optimize -> deliver
 - **Logo / icon:** generate -> `background_remove` with `imgly` or `withoutbg` -> inspect -> `optimize_image`
 - **Photoreal subject:** generate -> `background_remove` -> inspect -> `optimize_image`
 - **Web-ready banner:** generate -> `finalize_image` -> `optimize_image`
+- **Local MLX experiment:** generate with `IMAGE_MCP_LOCAL_PROVIDER=mlx` -> refine prompt -> save local PNG
+- **Local open endpoint:** connect to a user-owned OpenAI-compatible server -> generate -> post-process locally
 
 ## Inspection
 
