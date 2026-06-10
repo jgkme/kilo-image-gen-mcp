@@ -12,7 +12,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.6';
+const VERSION = '0.8.7';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -1115,10 +1115,25 @@ function optimizeOutputPath(outputPath, fallbackPrefix, format) {
 }
 
 async function optimizeImage(args) {
-  const { image, metadata } = await loadSharpInput(args.input_image);
+  const { buffer, output_path, mimeType, bytes, format, hasAlpha } = await optimizeImageBuffer(await readImageBuffer(args.input_image), args);
+  return {
+    type: 'image',
+    data: buffer.toString('base64'),
+    mimeType,
+    output_path,
+    bytes,
+    action: 'optimize_image',
+    model: hasAlpha ? 'png' : format
+  };
+}
+
+async function optimizeImageBuffer(inputBuffer, args = {}) {
+  const image = sharp(inputBuffer, { failOn: 'none' }).rotate();
+  const metadata = await image.metadata();
   const hasAlpha = Boolean(metadata.hasAlpha);
   const requestedFormat = String(args.output_format || '').toLowerCase();
-  const format = requestedFormat || (hasAlpha ? 'png' : 'webp');
+  const pathExt = args.output_path ? path.extname(args.output_path).replace('.', '').toLowerCase() : '';
+  const format = requestedFormat || pathExt || (hasAlpha ? 'png' : 'webp');
   const qualityValue = Number(args.quality);
   const compressionValue = Number(args.compression_level);
   const quality = Number.isFinite(qualityValue) ? Math.max(1, Math.min(100, qualityValue)) : 85;
@@ -1126,7 +1141,7 @@ async function optimizeImage(args) {
   const lossless = args.lossless === undefined ? format === 'png' : Boolean(args.lossless);
   const target = optimizeOutputPath(args.output_path, 'optimize', format);
 
-  let pipeline = image.clone().rotate();
+  let pipeline = image.clone();
   if (format === 'webp') {
     pipeline = pipeline.webp({ quality, lossless, effort: 6 });
   } else if (format === 'jpeg' || format === 'jpg') {
@@ -1137,16 +1152,16 @@ async function optimizeImage(args) {
     pipeline = pipeline.png({ compressionLevel, adaptiveFiltering: true, palette: Boolean(args.palette) });
   }
 
+  const buffer = await pipeline.toBuffer();
   await ensureDir(path.dirname(target));
-  await fs.writeFile(target, await pipeline.toBuffer());
+  await fs.writeFile(target, buffer);
   return {
-    type: 'image',
-    data: (await fs.readFile(target)).toString('base64'),
-    mimeType: `image/${format === 'jpg' ? 'jpeg' : format}`,
+    buffer,
     output_path: target,
-    bytes: (await fs.stat(target)).size,
-    action: 'optimize_image',
-    model: hasAlpha ? 'png' : format
+    mimeType: `image/${format === 'jpg' ? 'jpeg' : format}`,
+    bytes: buffer.length,
+    format,
+    hasAlpha
   };
 }
 
@@ -1400,15 +1415,16 @@ async function backgroundRemoveImage(args) {
   const { buffer: outputBuffer, backend, model } = await removeBackgroundBuffer(args);
   const defringedBuffer = await defringeAlphaBuffer(outputBuffer, args);
   const refinedBuffer = await refineAlphaBuffer(defringedBuffer, { ...args, backend });
-  const output_path = await saveBufferResult(refinedBuffer, args.output_path, 'background-remove');
-  const alpha = await alphaQualityStats(refinedBuffer);
-  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(refinedBuffer, output_path || args.output_path, 'background-remove') : undefined;
+  const optimized = await optimizeImageBuffer(refinedBuffer, args);
+  const output_path = optimized.output_path;
+  const alpha = await alphaQualityStats(optimized.buffer);
+  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(optimized.buffer, output_path || args.output_path, 'background-remove') : undefined;
   return {
     type: 'image',
-    data: refinedBuffer.toString('base64'),
-    mimeType: 'image/png',
+    data: optimized.buffer.toString('base64'),
+    mimeType: optimized.mimeType,
     output_path,
-    bytes: refinedBuffer.length,
+    bytes: optimized.bytes,
     backend,
     model,
     alpha,
@@ -1451,18 +1467,20 @@ async function finalizeImage(args) {
     pipeline = pipeline.flatten({ background: args.background });
   }
 
-  const output_path = await saveSharpResult(pipeline, args.output_path, 'finalize');
-  const outputBuffer = await refineAlphaBuffer(await defringeAlphaBuffer(await fs.readFile(output_path), args), { ...args, backend: backgroundInfo?.backend, background_backend: backgroundInfo?.backend });
-  await fs.writeFile(output_path, outputBuffer);
-  const outputMetadata = await sharp(outputBuffer, { failOn: 'none' }).metadata();
-  const alpha = await alphaQualityStats(outputBuffer);
-  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(outputBuffer, output_path || args.output_path, 'finalize') : undefined;
+  const rawOutput = await pipeline.toBuffer();
+  const defringedBuffer = await defringeAlphaBuffer(rawOutput, args);
+  const refinedBuffer = await refineAlphaBuffer(defringedBuffer, { ...args, backend: backgroundInfo?.backend, background_backend: backgroundInfo?.backend });
+  const optimized = await optimizeImageBuffer(refinedBuffer, args);
+  const output_path = optimized.output_path;
+  const outputMetadata = await sharp(optimized.buffer, { failOn: 'none' }).metadata();
+  const alpha = await alphaQualityStats(optimized.buffer);
+  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(optimized.buffer, output_path || args.output_path, 'finalize') : undefined;
   return {
     type: 'image',
-    data: outputBuffer.toString('base64'),
-    mimeType: 'image/png',
+    data: optimized.buffer.toString('base64'),
+    mimeType: optimized.mimeType,
     output_path,
-    bytes: outputBuffer.length,
+    bytes: optimized.bytes,
     width: outputMetadata.width || metadata.width,
     height: outputMetadata.height || metadata.height,
     backend: backgroundInfo?.backend,

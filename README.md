@@ -17,7 +17,7 @@ MCP server for image generation through Kilo Gateway and compatible providers.
 - Global Kilo skills for generation, editing, background removal, and transforms
 - Reusable smoke validation commands for OpenRouter, OpenAI, and local background removal
 - Debug mode via `IMAGE_MCP_DEBUG=1` for full error details and response payloads
-- `background_remove`, `resize_image`, `auto_crop`, and `finalize_image` work without any provider API key
+- `background_remove`, `resize_image`, `auto_crop`, and `optimize_image` work without any provider API key
 - `optimize_image` can re-encode assets as PNG, WebP, JPEG, or AVIF with metadata stripped so final outputs are smaller for web delivery
 - The smoke harness prints compact summaries by default; add `--json` or `--verbose` when you need raw output
 
@@ -272,6 +272,7 @@ Behavior:
 - `background_remove`, `resize_image`, and `auto_crop` are local deterministic tools that do not require provider API keys
 - `background_remove` can use the shared local withoutBG Docker daemon by setting `backend=withoutbg`; the daemon stays separate from the MCP process and can be reused across multiple VS Code windows
 - `background_remove` uses a local `rmbg` segmentation model by default and can switch to `imgly` for better edges
+- `background_remove` and `finalize_image` automatically run a web optimization pass after cleanup so transparent cutouts stay compressed and opaque outputs can become WebP when appropriate
 - `finalize_image` can chain local background removal, trim, crop, resize, and flatten in one call
 - `background_remove` and `finalize_image` also produce an inspection sheet that composites the result on white, black, gray, and magenta backgrounds so fringe problems are easier to spot
 - If that sheet shows obvious scanline, hatch, or banding texture, treat it as a source-image quality failure and regenerate the asset instead of trying to blame the alpha pass
