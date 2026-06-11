@@ -82,6 +82,31 @@ async function main() {
 
     if (resumed.workflow_id !== created.workflow_id) throw new Error('resume_workflow returned a different workflow');
 
+    const withStep = parseWorkflow(parseText(await call('tools/call', {
+      name: 'add_workflow_step',
+      arguments: {
+        workflow_id: created.workflow_id,
+        tool: 'generate_image',
+        status: 'completed',
+        summary: 'Initial image created',
+        result: { output_path: 'generated-images/example.png' }
+      }
+    })));
+
+    if (!Array.isArray(withStep.steps) || withStep.steps.length !== 1) throw new Error('add_workflow_step did not append a step');
+
+    const closed = parseWorkflow(parseText(await call('tools/call', {
+      name: 'close_workflow_step',
+      arguments: {
+        workflow_id: created.workflow_id,
+        step_id: withStep.steps[0].step_id,
+        status: 'completed',
+        summary: 'Finalized for delivery'
+      }
+    })));
+
+    if (closed.steps[0].status !== 'completed') throw new Error('close_workflow_step did not update step status');
+
     console.log(`WORKFLOW_OK:${created.workflow_id}`);
   } finally {
     child.kill('SIGTERM');

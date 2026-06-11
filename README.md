@@ -28,8 +28,10 @@ It combines:
 - `submit_task` and `get_task` for async generation workflows
 - `batch_generate_image` for running multiple prompts in one request
 - `create_workflow`, `update_workflow`, `get_workflow`, and `finalize_workflow` for iterative interactive jobs
+- `add_workflow_step` and `close_workflow_step` for explicit workflow lifecycle tracking
 - `resume_workflow` for continuing a persisted workflow after restart
-- `analyze_image_result`, `inspect_cutout`, `compare_variants`, and `suggest_next_step` for back-and-forth guidance
+- `analyze_image_result` and `suggest_next_step` for image-backed follow-up guidance
+- `inspect_cutout` and `compare_variants` for specialized analysis helpers
 - `background_remove` for local cutouts and the shared local withoutBG daemon
 - `resize_image` and `auto_crop` for deterministic local transforms
 - `optimize_image` for web-ready re-encoding and compression
