@@ -161,6 +161,7 @@ See `docs/public/clients.md` for ready-to-use examples for Kilo, Cursor, and gen
 - Use `get_provider_status` before troubleshooting a local runtime so you can see the expected endpoint and startup hint.
 - Use `IMAGE_MCP_LOCAL_BOOTSTRAP=1` when you want the server to print setup guidance for the configured local adapter.
 - Use the workflow tools when you want the server to return a workflow ID and suggested next steps instead of stopping after one tool call.
+- Run the workflow persistence regression test with `npm run test:workflow`.
 
 Workflow tools:
 
