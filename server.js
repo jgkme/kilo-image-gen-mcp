@@ -464,7 +464,8 @@ async function main() {
   const model = imageModelFor(provider, {});
   const outputDir = await resolveOutputDirHint();
   validateStartup();
-  process.stderr.write(`img-gen-mcp v${VERSION} starting [mode=${mode} provider=${provider} model=${model} outputDir=${outputDir}]\n`);
+  const debugStartup = env('IMAGE_MCP_DEBUG') === '1';
+  if (debugStartup) process.stderr.write(`img-gen-mcp v${VERSION} starting [mode=${mode} provider=${provider} model=${model} outputDir=${outputDir}]\n`);
   if (mode === 'http') {
     const transport = new StreamableHTTPServerTransport();
     await server.connect(transport);
@@ -473,7 +474,7 @@ async function main() {
     const httpServer = http.createServer(async (req, res) => {
       try { await transport.handleRequest(req, res); } catch (error) { res.statusCode = 500; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ error: String(error?.message || error) })); }
     });
-    httpServer.listen(port, host, () => process.stderr.write(`img-gen-mcp http listening on http://${host}:${port}\n`));
+    httpServer.listen(port, host, () => { if (debugStartup) process.stderr.write(`img-gen-mcp http listening on http://${host}:${port}\n`); });
     return;
   }
   await server.connect(new StdioServerTransport());
