@@ -460,9 +460,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => context.callT
 
 async function main() {
   const mode = cliTransportMode();
-  await resolveOutputDirHint();
+  const provider = providerFrom();
+  const model = imageModelFor(provider, {});
+  const outputDir = await resolveOutputDirHint();
   validateStartup();
-  process.stderr.write(`img-gen-mcp v${VERSION} starting\n`);
+  process.stderr.write(`img-gen-mcp v${VERSION} starting [mode=${mode} provider=${provider} model=${model} outputDir=${outputDir}]\n`);
   if (mode === 'http') {
     const transport = new StreamableHTTPServerTransport();
     await server.connect(transport);
