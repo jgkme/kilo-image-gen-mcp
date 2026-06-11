@@ -1,12 +1,12 @@
 # Client Examples
 
-`img-gen-mcp` works with any MCP client that can launch a local stdio server and pass environment variables.
+`img-gen-mcp` works with any MCP client that can launch a local stdio server, or a portable Streamable HTTP launcher mode, and pass environment variables.
 
 ## Launch options
 
 - Local checkout: `node /absolute/path/to/img-gen-mcp/server.js`
 - Published package: `npx -y img-gen-mcp`
-- HTTP transport: `IMAGE_MCP_TRANSPORT=http npm run serve:http`
+- HTTP transport: `npx -y img-gen-mcp http`
 
 ## App model access
 
@@ -34,7 +34,7 @@ The tools `list_image_models`, `get_provider_status`, and `get_model_capabilitie
   "mcp": {
     "img-gen-mcp": {
       "type": "local",
-      "command": ["node", "/absolute/path/to/img-gen-mcp/server.js"],
+      "command": ["npx", "-y", "img-gen-mcp"],
       "enabled": true,
       "environment": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "openrouter",
@@ -53,8 +53,8 @@ The tools `list_image_models`, `get_provider_status`, and `get_model_capabilitie
 {
   "mcpServers": {
     "img-gen-mcp": {
-      "command": "node",
-      "args": ["/absolute/path/to/img-gen-mcp/server.js"],
+      "command": "npx",
+      "args": ["-y", "img-gen-mcp"],
       "env": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "openrouter",
         "IMAGE_MCP_DEFAULT_MODEL": "openai/gpt-image-1",
@@ -72,7 +72,7 @@ The tools `list_image_models`, `get_provider_status`, and `get_model_capabilitie
   "mcpServers": {
     "img-gen-mcp": {
       "command": "npx",
-      "args": ["-y", "img-gen-mcp"],
+      "args": ["-y", "img-gen-mcp", "http"],
       "env": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "openrouter",
         "IMAGE_MCP_DEFAULT_MODEL": "openai/gpt-image-1"
@@ -110,5 +110,5 @@ The tools `list_image_models`, `get_provider_status`, and `get_model_capabilitie
 - Set provider API keys in the same environment block.
 - If your client supports long-running polling, prefer `submit_task` and `get_task` for larger generations.
 - If your client supports multiple invocations in one workflow, `batch_generate_image` is the cleanest way to compare prompt variants.
-- If the package is not published to npm yet, use the repository path directly instead of `npx`.
+- If you need HTTP mode, use the package-supported `http` launcher form rather than an absolute repository path.
 - If your client can keep context across tool calls, use the workflow tools and follow the returned `workflow_id` plus `next_steps`.

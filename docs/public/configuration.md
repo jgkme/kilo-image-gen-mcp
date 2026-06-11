@@ -27,7 +27,7 @@
 |---|---|
 | Local checkout | `node /absolute/path/to/img-gen-mcp/server.js` |
 | Published package | `npx -y img-gen-mcp` |
-| HTTP transport | `IMAGE_MCP_TRANSPORT=http npm run serve:http` |
+| HTTP transport | `npx -y img-gen-mcp http` |
 
 ## Example MCP config
 
@@ -80,7 +80,7 @@ If you set `provider` to `auto` in a tool call, the server infers the best provi
 
 ## Transport
 
-The default transport is stdio. To run the server over Streamable HTTP, set `IMAGE_MCP_TRANSPORT=http` and start the package with `npm run serve:http`.
+The default transport is stdio. To run the server over Streamable HTTP, use the portable `http` launcher mode: `npx -y img-gen-mcp http`.
 
 ## Guidance
 

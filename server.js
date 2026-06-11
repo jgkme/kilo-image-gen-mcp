@@ -323,6 +323,14 @@ function registerTask({ provider, model, prompt, action, output_path }) { const 
 async function runTask(task, runner) { task.status = 'running'; task.updated_at = new Date().toISOString(); try { const result = await runner(); task.status = 'completed'; task.result = result; task.updated_at = new Date().toISOString(); return task; } catch (error) { task.status = 'failed'; task.error = String(error?.message || error); task.updated_at = new Date().toISOString(); throw error; } }
 function getTask(task_id) { return taskRegistry.get(String(task_id || '')); }
 
+function cliTransportMode() {
+  const firstArg = String(process.argv[2] || '').toLowerCase();
+  const envMode = String(env('IMAGE_MCP_TRANSPORT') || '').toLowerCase();
+  if (firstArg === 'http' || firstArg === '--http' || firstArg === '--transport=http') return 'http';
+  if (envMode === 'http') return 'http';
+  return 'stdio';
+}
+
 async function generateImage(args) {
   const provider = resolveProvider(args);
   const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
@@ -451,7 +459,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await con
 server.setRequestHandler(CallToolRequestSchema, async (request) => context.callTool(request));
 
 async function main() {
-  const mode = String(env('IMAGE_MCP_TRANSPORT') || 'stdio').toLowerCase();
+  const mode = cliTransportMode();
   await resolveOutputDirHint();
   validateStartup();
   process.stderr.write(`img-gen-mcp v${VERSION} starting\n`);

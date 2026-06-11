@@ -12,7 +12,7 @@ It combines:
 - async task submission and polling
 - batch image generation for prompt sweeps and variants
 - local image generation through OpenAI-compatible endpoints and local bridges for MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
-- Streamable HTTP transport via `IMAGE_MCP_TRANSPORT=http` and `npm run serve:http`
+- Streamable HTTP transport via the portable `http` launcher mode
 - local background cleanup with `rmbg`, `imgly`, and a shared Docker-backed `withoutbg` daemon
 - web optimization with `sharp`
 - deterministic prompt enhancement before generation
@@ -69,7 +69,7 @@ Use the correct launch command for your setup:
 
 - Local checkout: `node /absolute/path/to/img-gen-mcp/server.js`
 - Published package: `npx -y img-gen-mcp`
-- HTTP transport: `IMAGE_MCP_TRANSPORT=http npm run serve:http`
+- HTTP transport: `npx -y img-gen-mcp http`
 
 Set these environment variables in your MCP client:
 
@@ -95,17 +95,17 @@ Local model environment variables:
 
 Transport and runtime flags:
 
-- `IMAGE_MCP_TRANSPORT=http` - opt in to Streamable HTTP transport
+- `IMAGE_MCP_TRANSPORT=http` - optional compatibility env var for HTTP launcher mode
 - `IMAGE_MCP_HTTP_HOST` - host for HTTP transport, defaults to `127.0.0.1`
 - `IMAGE_MCP_HTTP_PORT` - port for HTTP transport, defaults to `3333`
 
 HTTP transport example:
 
 ```bash
-IMAGE_MCP_TRANSPORT=http npm run serve:http
+npx -y img-gen-mcp http
 ```
 
-Use this form if Kilo Code times out on `npx -y img-gen-mcp` during startup, since it makes the transport mode explicit and prints startup status to stderr.
+Use this form if your client prefers Streamable HTTP. The package accepts a portable `http` launcher mode under `npx`.
 
 Example MCP config for a local checkout:
 
@@ -114,7 +114,7 @@ Example MCP config for a local checkout:
   "mcp": {
     "img-gen-mcp": {
       "type": "local",
-      "command": ["node", "/absolute/path/to/img-gen-mcp/server.js"],
+      "command": ["npx", "-y", "img-gen-mcp"],
       "enabled": true,
       "environment": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "openrouter",
@@ -135,7 +135,7 @@ Example MCP config for the published package:
   "mcp": {
     "img-gen-mcp": {
       "type": "local",
-      "command": ["npx", "-y", "img-gen-mcp"],
+      "command": ["npx", "-y", "img-gen-mcp", "http"],
       "enabled": true,
       "environment": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "openrouter",

@@ -6,9 +6,9 @@ const port = Number(process.argv[2] || process.env.IMAGE_MCP_HTTP_PORT || 3333);
 const host = process.env.IMAGE_MCP_HTTP_HOST || '127.0.0.1';
 
 async function main() {
-  const proc = spawn('node', ['./server.js'], {
+  const proc = spawn('node', ['./server.js', 'http'], {
     cwd: process.cwd(),
-    env: { ...process.env, IMAGE_MCP_TRANSPORT: 'http', IMAGE_MCP_HTTP_PORT: String(port), IMAGE_MCP_HTTP_HOST: host },
+    env: { ...process.env, IMAGE_MCP_HTTP_PORT: String(port), IMAGE_MCP_HTTP_HOST: host },
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
