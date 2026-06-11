@@ -6,3 +6,5 @@ dist/
 .kilo/
 .cache/
 generated-images/
+.plans/
+docs/superpowers/plans/
