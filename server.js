@@ -234,11 +234,14 @@ async function openrouterGenerate(args = {}) {
 async function openaiGenerate(args = {}) {
   const model = imageModelFor('openai', args);
   const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`openai-${Date.now()}`);
-  const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+  const prompt = promptWithAspect(args);
+  const size = dimensions(args);
+  const response = await axios.post('https://api.openai.com/v1/images/generations', {
     model,
-    messages: [{ role: 'user', content: promptWithAspect(args) }],
-    modalities: modalitiesForModel('openai', model, args.modalities),
-    ...(Number.isFinite(Number(args.max_tokens)) ? { max_tokens: Number(args.max_tokens) } : {})
+    prompt,
+    n: 1,
+    size: `${size.width}x${size.height}`,
+    ...(args.output_format ? { output_format: args.output_format } : {})
   }, {
     headers: {
       Authorization: `Bearer ${requireProviderKey('openai')}`,
