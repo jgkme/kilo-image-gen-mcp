@@ -457,12 +457,13 @@ async function backgroundRemoveImage(args = {}) {
     const healthy = await withoutBgDaemonHealthy();
     if (!healthy) throw new Error('withoutBG daemon is not running. Start it with docker-compose or set WITHOUTBG_AUTOSTART=1');
     const form = new FormData();
-    form.append('image', buffer, { filename: 'image.png', contentType: 'image/png' });
+    form.append('file', buffer, { filename: 'image.png', contentType: 'image/png' });
     if (model) form.append('model', model);
-    const response = await axios.post(`${withoutBgDaemonUrl().replace(/\/$/, '')}/remove`, form, { headers: form.getHeaders(), timeout: localTimeoutMs(), responseType: 'arraybuffer' });
+    const response = await axios.post(`${withoutBgDaemonUrl().replace(/\/$/, '')}/remove-background`, form, { headers: form.getHeaders(), timeout: localTimeoutMs(), responseType: 'arraybuffer' });
     await fs.writeFile(output_path, Buffer.from(response.data));
   } else if (backend === 'imgly') {
-    const blob = await removeBackground(buffer, { model: model || 'medium', output: { format: 'image/png' } });
+    const imageBlob = new Blob([buffer], { type: 'image/png' });
+    const blob = await removeBackground(imageBlob, { model: model || 'medium', output: { format: 'image/png' } });
     const arrayBuf = await blob.arrayBuffer();
     await fs.writeFile(output_path, Buffer.from(arrayBuf));
   } else {
