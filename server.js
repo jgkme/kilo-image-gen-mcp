@@ -174,7 +174,7 @@ function extractImageSource(data) {
     const message = item.message || item;
     if (Array.isArray(message?.images)) {
       for (const image of message.images) {
-        const source = image?.url || image?.data || image?.base64 || image?.b64_json || image?.image;
+        const source = image?.url || image?.data || image?.base64 || image?.b64_json || image?.image || image?.image_url?.url;
         if (typeof source === 'string' && /^data:image\//.test(source)) return source;
         if (typeof source === 'string' && /^https?:\/\//.test(source)) return source;
         if (typeof source === 'string' && /^[A-Za-z0-9+/=]+$/.test(source) && source.length > 128) return `data:image/png;base64,${source}`;
@@ -186,7 +186,7 @@ function extractImageSource(data) {
     }
     if (Array.isArray(content)) {
       for (const part of content) {
-        const source = part?.image || part?.url || part?.data || part?.base64 || part?.b64_json;
+        const source = part?.image || part?.url || part?.data || part?.base64 || part?.b64_json || part?.image_url?.url;
         if (typeof source === 'string' && /^data:image\//.test(source)) return source;
         if (typeof source === 'string' && /^https?:\/\//.test(source)) return source;
         if (typeof source === 'string' && /^[A-Za-z0-9+/=]+$/.test(source) && source.length > 128) return `data:image/png;base64,${source}`;
