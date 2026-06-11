@@ -26,6 +26,35 @@ generate -> background_remove/finalize -> inspect -> optimize -> deliver
 - Use `provider=auto` when the model slug already implies the backend family.
 - Use `get_provider_status` before switching local runtimes so you can verify endpoint, model, and bootstrap guidance.
 
+## Interactive loop
+
+`img-gen-mcp` can now return workflow IDs and suggested next steps so the client can continue the conversation without guessing the next tool.
+
+Workflow state is also persisted to `.image-mcp-workflows.json` in the current working directory so you can resume after a restart.
+
+Typical loop:
+
+1. `generate_image` or `edit_image`
+2. Read the returned `workflow_id` and `next_steps`
+3. Call the suggested follow-up tool
+4. Use `get_workflow` to inspect accumulated state
+5. Call `resume_workflow` after a restart if you want to continue the same job
+6. Call `finalize_workflow` when the asset is ready
+
+The server also returns a `next_step` shortcut in analysis payloads when a follow-up action is obvious.
+
+## New workflow tools
+
+- `create_workflow`
+- `update_workflow`
+- `get_workflow`
+- `resume_workflow`
+- `finalize_workflow`
+- `analyze_image_result`
+- `inspect_cutout`
+- `compare_variants`
+- `suggest_next_step`
+
 ## Inspection
 
 `background_remove` and `finalize_image` emit multi-background inspection sheets to make halos and matte residue easier to spot.

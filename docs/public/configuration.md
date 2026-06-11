@@ -21,6 +21,14 @@
 | `IMAGE_MCP_LOCAL_TIMEOUT_MS` | Request timeout for local endpoints |
 | `IMAGE_MCP_LOCAL_API_KEY` | Optional local auth token |
 
+## Launch guide
+
+| Setup | Command |
+|---|---|
+| Local checkout | `node /absolute/path/to/img-gen-mcp/server.js` |
+| Published package | `npx -y img-gen-mcp` |
+| HTTP transport | `IMAGE_MCP_TRANSPORT=http npm run serve:http` |
+
 ## Example MCP config
 
 ```jsonc

@@ -11,6 +11,8 @@ These skill files are bundled with the published `img-gen-mcp` package and are i
 - `image-models` - provider, model, local backend, and tool discovery guidance
 - `website-asset-workflow` - logos, favicons, hero images, and web delivery workflow
 
+The workflow-oriented skills now also map to the interactive tools in the server, including workflow IDs, next-step suggestions, and analysis helpers.
+
 ## How to use
 
 - Treat these as a companion reference for the MCP tools.

@@ -10,3 +10,5 @@ generated-images/
 docs/superpowers/plans/
 .kilo/skills/
 docs/superpowers/
+.image-mcp-workflows.json
+.image-mcp-last-workflow-id

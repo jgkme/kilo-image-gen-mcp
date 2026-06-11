@@ -50,6 +50,11 @@ function parseJsonContent(content = []) {
   }
 }
 
+function extractStructuredResult(response) {
+  const parsed = parseJsonContent(response?.result?.content);
+  return parsed && typeof parsed === 'object' ? parsed : undefined;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -94,6 +99,8 @@ const outputPath = args.output || `generated-images/${provider}-${tool}.png`;
 const jsonOutput = Boolean(args.json);
 const verbose = Boolean(args.verbose);
 const localEndpoint = args.local_endpoint || process.env.IMAGE_MCP_LOCAL_ENDPOINT;
+const workflowIdFile = path.resolve('.image-mcp-last-workflow-id');
+let cachedWorkflowId = args.workflow_id;
 
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 try { await fs.unlink(outputPath); } catch {}
@@ -136,6 +143,11 @@ const callArgs = {
   ...(args.trim !== undefined ? { trim: args.trim } : {})
 };
 
+if (['get_workflow', 'resume_workflow', 'update_workflow', 'finalize_workflow', 'suggest_next_step'].includes(tool)) {
+  try { cachedWorkflowId = cachedWorkflowId || String(await fs.readFile(workflowIdFile, 'utf8')).trim(); } catch {}
+  if (cachedWorkflowId) callArgs.workflow_id = cachedWorkflowId;
+}
+
 const response = await rpc.call('tools/call', { name: tool, arguments: callArgs });
 if (jsonOutput) {
   console.log(JSON.stringify(response, null, 2));
@@ -163,6 +175,27 @@ if (tool === 'submit_task') {
   if (!task) throw new Error(`Task ${taskId} did not resolve`);
 }
 
+if (tool === 'create_workflow') {
+  const parsed = extractStructuredResult(response);
+  if (parsed?.workflow_id) {
+    cachedWorkflowId = parsed.workflow_id;
+    await fs.writeFile(workflowIdFile, parsed.workflow_id);
+  }
+}
+
+if (tool === 'resume_workflow' && !args.workflow_id) {
+  try { callArgs.workflow_id = String(await fs.readFile(workflowIdFile, 'utf8')).trim(); } catch {}
+}
+
+if (tool === 'create_workflow' || tool === 'get_workflow' || tool === 'resume_workflow' || tool === 'update_workflow' || tool === 'finalize_workflow' || tool === 'suggest_next_step' || tool === 'analyze_image_result' || tool === 'inspect_cutout' || tool === 'compare_variants') {
+  const parsed = extractStructuredResult(response);
+  if (parsed?.workflow_id) console.log(`WORKFLOW:${parsed.workflow_id}`);
+  if (parsed?.suggestion?.suggested_tool) console.log(`SUGGEST:${parsed.suggestion.suggested_tool}`);
+  if (Array.isArray(parsed?.next_steps) && parsed.next_steps.length) console.log(`NEXT:${parsed.next_steps[0].suggested_tool}`);
+}
+
+const noFileTools = new Set(['create_workflow', 'resume_workflow', 'update_workflow', 'get_workflow', 'finalize_workflow', 'suggest_next_step', 'analyze_image_result', 'inspect_cutout', 'compare_variants']);
+
 if (tool === 'batch_generate_image') {
   const batch = parseJsonContent(response?.result?.content);
   const results = Array.isArray(batch?.results) ? batch.results : [];
@@ -173,9 +206,20 @@ if (tool === 'batch_generate_image') {
     const stat = await fs.stat(resolved);
     console.log(`SAVED:${resolved}:${stat.size}`);
   }
-} else {
+} else if (!noFileTools.has(tool)) {
   const stat = await fs.stat(path.resolve(outputPath));
   console.log(`SAVED:${path.resolve(outputPath)}:${stat.size}`);
+}
+
+if (tool === 'generate_image' || tool === 'edit_image') {
+  const parsed = extractStructuredResult(response);
+  if (parsed?.workflow_id) console.log(`WORKFLOW:${parsed.workflow_id}`);
+  if (Array.isArray(parsed?.next_steps) && parsed.next_steps.length) console.log(`NEXT:${parsed.next_steps[0].suggested_tool}`);
+}
+
+if (tool === 'generate_image' || tool === 'edit_image') {
+  const parsed = extractStructuredResult(response);
+  if (parsed?.analysis?.asset_class) console.log(`ASSET:${parsed.analysis.asset_class}`);
 }
 
 if (tool === 'generate_image' && ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) {

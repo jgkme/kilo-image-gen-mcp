@@ -27,6 +27,9 @@ It combines:
 - local provider support for OpenAI-compatible endpoints and local bridges like MLX, ComfyUI, and Draw Things
 - `submit_task` and `get_task` for async generation workflows
 - `batch_generate_image` for running multiple prompts in one request
+- `create_workflow`, `update_workflow`, `get_workflow`, and `finalize_workflow` for iterative interactive jobs
+- `resume_workflow` for continuing a persisted workflow after restart
+- `analyze_image_result`, `inspect_cutout`, `compare_variants`, and `suggest_next_step` for back-and-forth guidance
 - `background_remove` for local cutouts and the shared local withoutBG daemon
 - `resize_image` and `auto_crop` for deterministic local transforms
 - `optimize_image` for web-ready re-encoding and compression
@@ -42,7 +45,15 @@ It combines:
 npm install -g img-gen-mcp
 ```
 
+If you are running from a local checkout instead of npm, point your MCP client at `node /absolute/path/to/img-gen-mcp/server.js` rather than `npx`.
+
 ## Configuration
+
+Use the correct launch command for your setup:
+
+- Local checkout: `node /absolute/path/to/img-gen-mcp/server.js`
+- Published package: `npx -y img-gen-mcp`
+- HTTP transport: `IMAGE_MCP_TRANSPORT=http npm run serve:http`
 
 Set these environment variables in your MCP client:
 
@@ -65,8 +76,12 @@ Local model environment variables:
 - `IMAGE_MCP_LOCAL_BOOTSTRAP=1` - opt-in bootstrap helper mode
 - `IMAGE_MCP_LOCAL_TIMEOUT_MS` - request timeout for local endpoints
 - `IMAGE_MCP_LOCAL_API_KEY` - optional local auth token
+
+Transport and runtime flags:
+
 - `IMAGE_MCP_TRANSPORT=http` - opt in to Streamable HTTP transport
-- `IMAGE_MCP_DEBUG=1` - include detailed tool errors and provider payloads
+- `IMAGE_MCP_HTTP_HOST` - host for HTTP transport, defaults to `127.0.0.1`
+- `IMAGE_MCP_HTTP_PORT` - port for HTTP transport, defaults to `3333`
 
 HTTP transport example:
 
@@ -74,7 +89,28 @@ HTTP transport example:
 IMAGE_MCP_TRANSPORT=http npm run serve:http
 ```
 
-Example MCP config:
+Example MCP config for a local checkout:
+
+```jsonc
+{
+  "mcp": {
+    "img-gen-mcp": {
+      "type": "local",
+      "command": ["node", "/absolute/path/to/img-gen-mcp/server.js"],
+      "enabled": true,
+      "environment": {
+        "IMAGE_MCP_DEFAULT_PROVIDER": "openrouter",
+        "IMAGE_MCP_DEFAULT_MODEL": "openai/gpt-image-1",
+        "IMAGE_MCP_DEFAULT_BG_BACKEND": "imgly",
+        "WITHOUTBG_DAEMON_URL": "http://127.0.0.1:8765",
+        "WITHOUTBG_AUTOSTART": "1"
+      }
+    }
+  }
+}
+```
+
+Example MCP config for the published package:
 
 ```jsonc
 {
@@ -124,6 +160,19 @@ See `docs/public/clients.md` for ready-to-use examples for Kilo, Cursor, and gen
 - Use `batch_generate_image` when you want multiple prompt variants without reconfiguring the client.
 - Use `get_provider_status` before troubleshooting a local runtime so you can see the expected endpoint and startup hint.
 - Use `IMAGE_MCP_LOCAL_BOOTSTRAP=1` when you want the server to print setup guidance for the configured local adapter.
+- Use the workflow tools when you want the server to return a workflow ID and suggested next steps instead of stopping after one tool call.
+
+Workflow tools:
+
+- `create_workflow`
+- `update_workflow`
+- `get_workflow`
+- `resume_workflow`
+- `finalize_workflow`
+- `analyze_image_result`
+- `inspect_cutout`
+- `compare_variants`
+- `suggest_next_step`
 
 ## App Model Access
 

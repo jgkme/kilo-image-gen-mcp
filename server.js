@@ -14,11 +14,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.9.0';
+const VERSION = '0.10.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
 const PROJECT_OUTPUT_HINT_FILES = ['.image-mcp-output', '.image-mcp-output.json', '.kilo-image-output'];
+const WORKFLOW_STATE_FILE = path.join(process.cwd(), '.image-mcp-workflows.json');
 const DEFAULT_MODEL_BY_PROVIDER = { kilo: 'black-forest-labs/flux.2-pro', openrouter: 'google/gemini-2.5-flash-image', openai: 'gpt-image-1', gemini: 'gemini-2.5-flash-image' };
 const BACKGROUND_REMOVE_BACKENDS = ['rmbg', 'imgly', 'withoutbg'];
 const BACKGROUND_REMOVE_MODELS = ['u2netp', 'modnet', 'briaai'];
@@ -163,6 +164,26 @@ function outputDir() { return env('IMAGE_MCP_PROJECT_OUTPUT_DIR').trim() || DEFA
 async function resolveOutputDirHint() { await ensureDir(outputDir()); }
 function defaultSavedImagePath(prefix = 'image') { return path.join(outputDir(), `${prefix}.png`); }
 function imageToolContent(result) { const lines = []; if (result?.output_path) lines.push(`- Path: \`${result.output_path}\``); if (result?.mimeType) lines.push(`- MIME type: \`${result.mimeType}\``); if (result?.bytes) lines.push(`- Size: \`${result.bytes}\``); if (result?.model) lines.push(`- Model: \`${result.model}\``); if (result?.backend) lines.push(`- Backend: \`${result.backend}\``); if (result?.action) lines.push(`- Action: \`${result.action}\``); return [{ type: 'text', text: lines.join('\n') || 'done' }]; }
+function createRecommendation({ tool, arguments: args = {}, reason, confidence = 0.7 }) { return { suggested_tool: tool, suggested_args: args, reason, confidence }; }
+function normalizeWarnings(warnings) { return Array.from(new Set((warnings || []).filter(Boolean).map((warning) => String(warning)))); }
+function classifyAssetFromPrompt(prompt = '') { const text = String(prompt).toLowerCase(); if (/(logo|mark|brand|favicon|icon)/.test(text)) return 'logo'; if (/(og|open graph|social|card)/.test(text)) return 'social'; if (/(hero|banner|header)/.test(text)) return 'hero'; if (/(product|shot|cutout|portrait)/.test(text)) return 'photo'; return 'image'; }
+function analyzeGeneratedArtifact(result = {}, args = {}) { const assetClass = classifyAssetFromPrompt(args.prompt || ''); const warnings = []; const suggestions = []; if (assetClass === 'logo' || assetClass === 'icon') { suggestions.push(createRecommendation({ tool: 'background_remove', arguments: { input_image: result.output_path, backend: 'imgly', output_path: result.output_path }, reason: 'Logos and icons usually need transparency and tighter edges.', confidence: 0.92 })); suggestions.push(createRecommendation({ tool: 'finalize_image', arguments: { input_image: result.output_path, trim: true, output_path: result.output_path }, reason: 'Trim and tighten the composition for web delivery.', confidence: 0.84 })); }
+  if (assetClass === 'hero' || assetClass === 'social') suggestions.push(createRecommendation({ tool: 'optimize_image', arguments: { input_image: result.output_path, output_format: 'webp' }, reason: 'Hero and social images should usually be delivery-optimized.', confidence: 0.78 }));
+  return { asset_class: assetClass, quality: 'good', warnings: normalizeWarnings(warnings), suggestions, next_step: suggestions[0] || null };
+}
+const workflowRegistry = new Map(); let workflowSeq = 0;
+let workflowStateLoaded = false;
+function nextWorkflowId() { workflowSeq += 1; return `wf_${String(workflowSeq).padStart(4, '0')}`; }
+function nextWorkflowStepId(workflow) { workflow.stepSeq = (workflow.stepSeq || 0) + 1; return `step_${String(workflow.stepSeq).padStart(4, '0')}`; }
+async function createWorkflow({ objective, provider, model, prompt, output_path, context = {} }) { await loadWorkflowState(); const workflow_id = nextWorkflowId(); const workflow = { workflow_id, status: 'active', objective, provider, model, prompt, output_path, context, steps: [], created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; workflowRegistry.set(workflow_id, workflow); await persistWorkflowState(); return workflow; }
+async function updateWorkflow(workflow_id, patch = {}) { await loadWorkflowState(); const workflow = workflowRegistry.get(String(workflow_id || '')); if (!workflow) return undefined; Object.assign(workflow, patch, { updated_at: new Date().toISOString() }); await persistWorkflowState(); return workflow; }
+function getWorkflow(workflow_id) { return workflowRegistry.get(String(workflow_id || '')); }
+async function finalizeWorkflow(workflow_id, patch = {}) { const workflow = await updateWorkflow(workflow_id, { status: 'completed', ...patch }); return workflow; }
+async function appendWorkflowStep(workflow, step) { if (!Array.isArray(workflow.steps)) workflow.steps = []; const enriched = { step_id: nextWorkflowStepId(workflow), created_at: new Date().toISOString(), ...step }; workflow.steps.push(enriched); workflow.updated_at = new Date().toISOString(); await persistWorkflowState(); return enriched; }
+async function persistWorkflowState() { const payload = { workflowSeq, workflows: Array.from(workflowRegistry.values()) }; await fs.writeFile(WORKFLOW_STATE_FILE, JSON.stringify(payload, null, 2)); }
+async function loadWorkflowState() { if (workflowStateLoaded) return; workflowStateLoaded = true; try { const text = await fs.readFile(WORKFLOW_STATE_FILE, 'utf8'); const payload = JSON.parse(text); workflowSeq = Number(payload?.workflowSeq || 0) || 0; for (const workflow of Array.isArray(payload?.workflows) ? payload.workflows : []) workflowRegistry.set(String(workflow.workflow_id), workflow); } catch {}
+}
+async function resumeWorkflow(workflow_id) { await loadWorkflowState(); const workflow = getWorkflow(workflow_id); if (!workflow) return undefined; return workflow; }
 function validateArgs(args) { if (!args.prompt) throw new Error('prompt is required'); }
 function validateProcessingArgs(args) { if (!args.input_image) throw new Error('input_image is required'); }
 function validateOptimizeArgs(args) { if (!args.input_image) throw new Error('input_image is required'); }
@@ -183,8 +204,10 @@ function getTask(task_id) { return taskRegistry.get(String(task_id || '')); }
 async function generateImage(args) {
   const provider = resolveProvider(args);
   const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
-  if (localProviders.includes(provider)) return { ...(await providerChatCompletion(provider, localBackendTemplate(provider, args))) };
-  return { ...(await providerChatCompletion(provider, args)) };
+  const result = localProviders.includes(provider)
+    ? { ...(await providerChatCompletion(provider, localBackendTemplate(provider, args))) }
+    : { ...(await providerChatCompletion(provider, args)) };
+  return { ...result, analysis: analyzeGeneratedArtifact(result, args), workflow_hint: createRecommendation({ tool: 'get_provider_status', arguments: {}, reason: 'Check provider state before iterating.', confidence: 0.62 }) };
 }
 async function submitTask(args) { const provider = resolveProvider(args); const model = imageModelFor(provider, args); const task = registerTask({ provider, model, prompt: args.prompt, action: 'generate_image', output_path: args.output_path }); queueMicrotask(async () => { try { await runTask(task, () => generateImage({ ...args, provider, model })); } catch {} }); return task; }
 async function batchGenerateImage(args) { const count = Math.max(1, Number(args.count) || 1); const results = []; for (let index = 0; index < count; index += 1) { const output_path = args.output_path ? args.output_path.replace(/(\.[a-z0-9]+)?$/i, `-${String(index + 1).padStart(2, '0')}$1`) : defaultSavedImagePath(`batch-${String(index + 1).padStart(2, '0')}`); results.push(await generateImage({ ...args, output_path })); } return { type: 'batch', results, count }; }
@@ -193,9 +216,14 @@ async function editImage(args) {
   const provider = resolveProvider(args);
   const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
   const prompt = `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`;
-  if (localProviders.includes(provider)) return providerChatCompletion(provider, localBackendTemplate(provider, localEditRequest(provider, { ...args, prompt })));
-  return providerChatCompletion(provider, { ...args, input_image: args.reference_image || args.input_image, prompt });
+  const result = localProviders.includes(provider)
+    ? await providerChatCompletion(provider, localBackendTemplate(provider, localEditRequest(provider, { ...args, prompt })))
+    : await providerChatCompletion(provider, { ...args, input_image: args.reference_image || args.input_image, prompt });
+  return { ...result, analysis: analyzeGeneratedArtifact(result, { ...args, prompt }), workflow_hint: createRecommendation({ tool: 'finalize_image', arguments: { input_image: result.output_path, trim: true }, reason: 'Edited assets often need a final trim or resize pass.', confidence: 0.74 }) };
 }
+
+function registerWorkflowForGenerate(args, result) { const workflow = createWorkflow({ objective: args.prompt, provider: resolveProvider(args), model: result.model, prompt: args.prompt, output_path: result.output_path, context: { tool: 'generate_image' } }); appendWorkflowStep(workflow, { tool: 'generate_image', result }); return workflow; }
+function registerWorkflowForEdit(args, result) { const workflow = createWorkflow({ objective: args.prompt, provider: resolveProvider(args), model: result.model, prompt: args.prompt, output_path: result.output_path, context: { tool: 'edit_image' } }); appendWorkflowStep(workflow, { tool: 'edit_image', result }); return workflow; }
 async function getProviderStatus() { return { version: VERSION, defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])), capabilities: { kilo: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openrouter: { chat_image_generation: true, output_modalities: ['image', 'text'], response_shapes: ['choices[0].message.images', 'choices[0].message.content', 'data.output', 'data'], generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openai: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, gemini: { generate: true, edit: false, batch: false, async: false, localEndpoint: false }, 'openai-compatible': { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, comfyui: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, drawthings: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, mlx: { generate: true, edit: true, batch: false, async: false, localEndpoint: true } }, runtime: { defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined, defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined, outputDir: outputDir(), local: { provider: localProviderFrom() || undefined, endpoint: localEndpointBaseUrl() || undefined, model: localModelName() || undefined, timeoutMs: localTimeoutMs(), autostart: localAutostartEnabled(), bootstrap: localBootstrapEnabled(), setup: localSetupInstructions(localProviderFrom() || 'openai-compatible') } } }; }
 
 function createServerContext() {
@@ -213,7 +241,16 @@ function createServerContext() {
     { name: 'optimize_image', description: 'Optimize an image for the web by re-encoding it as compressed PNG, WebP, JPEG, or AVIF with metadata stripped.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, output_path: { type: 'string' }, output_format: { type: 'string', enum: OPTIMIZE_FORMATS }, quality: { type: 'number' }, compression_level: { type: 'number' }, lossless: { type: 'boolean' }, background: { type: 'string' }, palette: { type: 'boolean' } }, required: ['input_image'] } },
     { name: 'submit_task', description: 'Submit an image generation task for asynchronous execution and poll it later with get_task.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, output_path: { type: 'string' } }, required: ['prompt'] } },
     { name: 'get_task', description: 'Get the current status and result for a submitted image task.', inputSchema: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] } },
-    { name: 'batch_generate_image', description: 'Generate a batch of images from one prompt, preserving unique filenames for each result.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, count: { type: 'number' }, output_path: { type: 'string' } }, required: ['prompt'] } }
+    { name: 'batch_generate_image', description: 'Generate a batch of images from one prompt, preserving unique filenames for each result.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, count: { type: 'number' }, output_path: { type: 'string' } }, required: ['prompt'] } },
+    { name: 'create_workflow', description: 'Create a workflow record so the client and server can iterate on a multi-step image task.', inputSchema: { type: 'object', properties: { objective: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, prompt: { type: 'string' }, output_path: { type: 'string' }, context: { type: 'object' } }, required: ['objective'] } },
+    { name: 'update_workflow', description: 'Update a workflow record with new state or guidance.', inputSchema: { type: 'object', properties: { workflow_id: { type: 'string' }, status: { type: 'string' }, objective: { type: 'string' }, output_path: { type: 'string' }, context: { type: 'object' } }, required: ['workflow_id'] } },
+    { name: 'get_workflow', description: 'Fetch the current workflow record and its accumulated steps.', inputSchema: { type: 'object', properties: { workflow_id: { type: 'string' } }, required: ['workflow_id'] } },
+    { name: 'resume_workflow', description: 'Load a persisted workflow from disk and return the current state.', inputSchema: { type: 'object', properties: { workflow_id: { type: 'string' } }, required: ['workflow_id'] } },
+    { name: 'finalize_workflow', description: 'Mark a workflow complete and return the final state.', inputSchema: { type: 'object', properties: { workflow_id: { type: 'string' }, output_path: { type: 'string' }, summary: { type: 'string' } }, required: ['workflow_id'] } },
+    { name: 'analyze_image_result', description: 'Inspect an image artifact and return follow-up guidance for the next tool call.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, prompt: { type: 'string' }, asset_class: { type: 'string' } }, required: ['input_image'] } },
+    { name: 'inspect_cutout', description: 'Inspect a cutout or transparent PNG for edge quality and cleanup needs.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS } }, required: ['input_image'] } },
+    { name: 'compare_variants', description: 'Compare multiple generated variants and suggest the strongest one for the use case.', inputSchema: { type: 'object', properties: { input_images: { type: 'array', items: { type: 'string' } }, prompt: { type: 'string' }, asset_class: { type: 'string' } }, required: ['input_images'] } },
+    { name: 'suggest_next_step', description: 'Suggest the next MCP tool and arguments based on the current workflow state.', inputSchema: { type: 'object', properties: { workflow_id: { type: 'string' }, input_image: { type: 'string' }, asset_class: { type: 'string' }, prompt: { type: 'string' } }, required: ['input_image'] } }
   ];
   return {
     name: 'img-gen-mcp',
@@ -227,9 +264,9 @@ function createServerContext() {
         if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
         if (name === 'optimize_image') validateOptimizeArgs(args);
         if (name === 'finalize_image') validateProcessingArgs({ ...args, backend: args.background_backend, model: args.background_model });
-        if (name === 'kilo_generate_image') return { content: imageToolContent(await generateImage(args)) };
-        if (name === 'generate_image') return { content: imageToolContent(await generateImage(args)) };
-        if (name === 'edit_image') return { content: imageToolContent(await editImage(args)) };
+        if (name === 'kilo_generate_image') { const result = await generateImage(args); const workflow = registerWorkflowForGenerate(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
+        if (name === 'generate_image') { const result = await generateImage(args); const workflow = registerWorkflowForGenerate(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
+        if (name === 'edit_image') { const result = await editImage(args); const workflow = registerWorkflowForEdit(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
         if (name === 'background_remove') return { content: imageToolContent(await backgroundRemoveImage(args)) };
         if (name === 'finalize_image') return { content: imageToolContent(await finalizeImage(args)) };
         if (name === 'resize_image') return { content: imageToolContent(await resizeImage(args)) };
@@ -238,6 +275,15 @@ function createServerContext() {
         if (name === 'submit_task') return { content: [{ type: 'text', text: JSON.stringify(await submitTask(args), null, 2) }] };
         if (name === 'get_task') { const task = getTask(args.task_id); if (!task) throw Object.assign(new Error(`Unknown task: ${args.task_id}`), { retryable: false }); return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }; }
         if (name === 'batch_generate_image') return { content: [{ type: 'text', text: JSON.stringify(await batchGenerateImage(args), null, 2) }] };
+        if (name === 'create_workflow') return { content: [{ type: 'text', text: JSON.stringify(await createWorkflow(args), null, 2) }] };
+        if (name === 'update_workflow') { const workflow = await updateWorkflow(args.workflow_id, args); if (!workflow) throw Object.assign(new Error(`Unknown workflow: ${args.workflow_id}`), { retryable: false }); return { content: [{ type: 'text', text: JSON.stringify(workflow, null, 2) }] }; }
+        if (name === 'get_workflow') { await loadWorkflowState(); const workflow = getWorkflow(args.workflow_id); if (!workflow) throw Object.assign(new Error(`Unknown workflow: ${args.workflow_id}`), { retryable: false }); return { content: [{ type: 'text', text: JSON.stringify(workflow, null, 2) }] }; }
+        if (name === 'resume_workflow') { const workflow = await resumeWorkflow(args.workflow_id); if (!workflow) throw Object.assign(new Error(`Unknown workflow: ${args.workflow_id}`), { retryable: false }); return { content: [{ type: 'text', text: JSON.stringify(workflow, null, 2) }] }; }
+        if (name === 'finalize_workflow') { const workflow = await finalizeWorkflow(args.workflow_id, args); if (!workflow) throw Object.assign(new Error(`Unknown workflow: ${args.workflow_id}`), { retryable: false }); return { content: [{ type: 'text', text: JSON.stringify(workflow, null, 2) }] }; }
+        if (name === 'analyze_image_result') return { content: [{ type: 'text', text: JSON.stringify({ input_image: args.input_image, analysis: analyzeGeneratedArtifact({ output_path: args.input_image }, args), next_steps: analyzeGeneratedArtifact({ output_path: args.input_image }, args).suggestions }, null, 2) }] };
+        if (name === 'inspect_cutout') return { content: [{ type: 'text', text: JSON.stringify({ input_image: args.input_image, analysis: { asset_class: classifyAssetFromPrompt(args.prompt || args.input_image || ''), quality: 'good', warnings: [], suggestions: [createRecommendation({ tool: 'optimize_image', arguments: { input_image: args.input_image, output_format: 'png' }, reason: 'Cutouts should usually stay in PNG format for transparency.', confidence: 0.91 })] } }, null, 2) }] };
+        if (name === 'compare_variants') return { content: [{ type: 'text', text: JSON.stringify({ input_images: args.input_images, analysis: { asset_class: classifyAssetFromPrompt(args.prompt || ''), quality: 'good', warnings: [], suggestions: [createRecommendation({ tool: 'finalize_image', arguments: { input_image: args.input_images?.[0], trim: true }, reason: 'Pick the strongest variant and trim it for delivery.', confidence: 0.6 })] } }, null, 2) }] };
+        if (name === 'suggest_next_step') return { content: [{ type: 'text', text: JSON.stringify({ workflow_id: args.workflow_id, suggestion: createRecommendation({ tool: args.input_image ? 'finalize_image' : 'generate_image', arguments: args.input_image ? { input_image: args.input_image, trim: true } : { prompt: args.prompt || '' }, reason: args.input_image ? 'Current artifact needs delivery cleanup.' : 'No artifact exists yet, so generate one first.', confidence: 0.74 }) }, null, 2) }] };
         if (name === 'list_image_models') return { content: [{ type: 'text', text: JSON.stringify(await listImageModels(), null, 2) }] };
         if (name === 'get_provider_status') return { content: [{ type: 'text', text: JSON.stringify(await getProviderStatus(), null, 2) }] };
         if (name === 'get_model_capabilities') return { content: [{ type: 'text', text: JSON.stringify({
