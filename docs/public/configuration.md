@@ -49,6 +49,27 @@
 }
 ```
 
+## Local bootstrap helper
+
+Use `scripts/bootstrap-local-runtime.mjs` to print a backend-specific startup hint and matching environment exports.
+
+Examples:
+
+```bash
+node ./scripts/bootstrap-local-runtime.mjs
+IMAGE_MCP_LOCAL_PROVIDER=mlx node ./scripts/bootstrap-local-runtime.mjs
+IMAGE_MCP_LOCAL_PROVIDER=openai-compatible node ./scripts/bootstrap-local-runtime.mjs
+```
+
+## Provider auto-selection
+
+If you set `provider` to `auto` in a tool call, the server infers the best provider from the model slug when possible. Examples:
+
+- `openai/gpt-image-1` -> `openai`
+- `google/gemini-2.5-flash-image` -> `gemini`
+- `recraft/recraft-v4.1-vector` -> `openrouter`
+- local wrapper slugs -> the configured local provider
+
 ## Shared withoutBG daemon
 
 Run the daemon once and reuse it across all MCP clients:

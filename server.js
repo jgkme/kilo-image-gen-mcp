@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import http from 'node:http';
 import FormData from 'form-data';
 import axios from 'axios';
 import sharp from 'sharp';
@@ -10,1873 +11,239 @@ import { rmbg, createBriaaiModel, createModnetModel, createU2netpModel } from 'r
 import removeBackground from '@imgly/background-removal-node';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.8.7';
+const VERSION = '0.9.0';
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
 const PROJECT_OUTPUT_HINT_FILES = ['.image-mcp-output', '.image-mcp-output.json', '.kilo-image-output'];
-const DEFAULT_MODEL_BY_PROVIDER = {
-  kilo: 'black-forest-labs/flux.2-pro',
-  openrouter: 'google/gemini-2.5-flash-image',
-  openai: 'gpt-image-1',
-  gemini: 'gemini-2.5-flash-image'
-};
+const DEFAULT_MODEL_BY_PROVIDER = { kilo: 'black-forest-labs/flux.2-pro', openrouter: 'google/gemini-2.5-flash-image', openai: 'gpt-image-1', gemini: 'gemini-2.5-flash-image' };
 const BACKGROUND_REMOVE_BACKENDS = ['rmbg', 'imgly', 'withoutbg'];
 const BACKGROUND_REMOVE_MODELS = ['u2netp', 'modnet', 'briaai'];
 const IMGLY_BACKGROUND_REMOVE_MODELS = ['small', 'medium'];
 const PROVIDERS = ['kilo', 'openrouter', 'openai', 'gemini', 'openai-compatible', 'comfyui', 'drawthings', 'mlx'];
-const KNOWN_MODELS = {
-  kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'],
-  openrouter: [
-    'black-forest-labs/flux.2-pro',
-    'black-forest-labs/flux.2-flex',
-    'microsoft/mai-image-2.5',
-    'google/gemini-2.5-flash-image',
-    'google/gemini-2.5-flash-image-preview',
-    'google/gemini-3-pro-image-preview',
-    'openai/gpt-image-1',
-    'openai/gpt-5.4-image-2',
-    'x-ai/grok-imagine-image-quality',
-    'sourceful/riverflow-v2-fast',
-    'sourceful/riverflow-v2-pro',
-    'sourceful/riverflow-v2.5-fast:free',
-    'sourceful/riverflow-v2.5-fast',
-    'sourceful/riverflow-v2.5-pro',
-    'bytedance-seed/seedream-4.5',
-    'recraft/recraft-v4.1-utility',
-    'recraft/recraft-v4.1-vector',
-    'recraft/recraft-v4.1-utility-pro',
-    'recraft/recraft-v4.1-pro-vector',
-    'recraft/recraft-v3'
-  ],
-  openai: ['gpt-image-1'],
-  gemini: ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'],
-  'openai-compatible': ['gpt-image-1'],
-  comfyui: ['comfyui-local'],
-  drawthings: ['drawthings-local'],
-  mlx: ['mlx-vlm']
-};
-
-const EDIT_CAPABILITIES = {
-  kilo: true,
-  openrouter: true,
-  openai: true,
-  gemini: false,
-  'openai-compatible': true,
-  comfyui: true,
-  drawthings: true,
-  mlx: true
-};
-
+const KNOWN_MODELS = { kilo: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex'], openrouter: ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex', 'microsoft/mai-image-2.5', 'google/gemini-2.5-flash-image', 'google/gemini-2.5-flash-image-preview', 'google/gemini-3-pro-image-preview', 'openai/gpt-image-1', 'openai/gpt-5.4-image-2', 'x-ai/grok-imagine-image-quality', 'sourceful/riverflow-v2-fast', 'sourceful/riverflow-v2-pro', 'sourceful/riverflow-v2.5-fast:free', 'sourceful/riverflow-v2.5-fast', 'sourceful/riverflow-v2.5-pro', 'bytedance-seed/seedream-4.5', 'recraft/recraft-v4.1-utility', 'recraft/recraft-v4.1-vector', 'recraft/recraft-v4.1-utility-pro', 'recraft/recraft-v4.1-pro-vector', 'recraft/recraft-v3'], openai: ['gpt-image-1'], gemini: ['gemini-2.5-flash-image', 'gemini-3.1-flash-image-preview', 'gemini-3-pro-image-preview'], 'openai-compatible': ['gpt-image-1'], comfyui: ['comfyui-local'], drawthings: ['drawthings-local'], mlx: ['mlx-vlm'] };
+const EDIT_CAPABILITIES = { kilo: true, openrouter: true, openai: true, gemini: false, 'openai-compatible': true, comfyui: true, drawthings: true, mlx: true };
 const PROCESSING_FITS = ['cover', 'contain', 'fill', 'inside', 'outside'];
 const OPTIMIZE_FORMATS = ['png', 'webp', 'jpeg', 'jpg', 'avif'];
-
-const server = new Server(
-  { name: 'img-gen-mcp', version: VERSION },
-  { capabilities: { tools: {} } }
-);
 
 const SERVER_DIR = path.dirname(fileURLToPath(import.meta.url));
 const WITHOUTBG_DAEMON_COMPOSE = path.join(SERVER_DIR, 'withoutbg-daemon', 'docker-compose.yml');
 const WITHOUTBG_DAEMON_LOCK = path.join(process.env.HOME || process.cwd(), '.local', 'share', 'kilo', 'locks', 'withoutbg.lock');
 
-function configuredKey(name) {
-  const value = env(name).trim();
-  return value || undefined;
+function env(name) { return process.env[name] || ''; }
+function configuredKey(name) { const value = env(name).trim(); return value || undefined; }
+function providerKey(provider) { if (provider === 'kilo') return configuredKey('KILO_API_KEY'); if (provider === 'openrouter') return configuredKey('OPENROUTER_API_KEY'); if (provider === 'openai') return configuredKey('OPENAI_API_KEY'); if (provider === 'gemini') return configuredKey('GEMINI_API_KEY'); if (provider === 'openai-compatible' || provider === 'comfyui' || provider === 'drawthings' || provider === 'mlx') return configuredKey('IMAGE_MCP_LOCAL_API_KEY'); return undefined; }
+function localProviderMode() { return String(env('IMAGE_MCP_LOCAL_PROVIDER') || '').trim().toLowerCase(); }
+function localEndpointBaseUrl() { return String(env('IMAGE_MCP_LOCAL_ENDPOINT') || '').trim() || undefined; }
+function localModelName() { return String(env('IMAGE_MCP_LOCAL_MODEL') || '').trim() || undefined; }
+function localTimeoutMs() { const value = Number(env('IMAGE_MCP_LOCAL_TIMEOUT_MS') || ''); return Number.isFinite(value) && value > 0 ? value : 120000; }
+function localAutostartEnabled() { return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_LOCAL_AUTOSTART').trim().toLowerCase()); }
+function localBootstrapEnabled() { return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_LOCAL_BOOTSTRAP').trim().toLowerCase()); }
+function localSetupInstructions(provider) {
+  if (provider === 'mlx') return ['Install MLX-VLM or your chosen MLX wrapper', 'Start the local HTTP endpoint', 'Set IMAGE_MCP_LOCAL_ENDPOINT and IMAGE_MCP_LOCAL_MODEL'];
+  if (provider === 'comfyui') return ['Start ComfyUI', 'Expose a workflow endpoint that accepts image generation jobs', 'Set IMAGE_MCP_LOCAL_ENDPOINT and IMAGE_MCP_LOCAL_MODEL'];
+  if (provider === 'drawthings') return ['Start Draw Things', 'Expose the local bridge endpoint', 'Set IMAGE_MCP_LOCAL_ENDPOINT and IMAGE_MCP_LOCAL_MODEL'];
+  if (provider === 'openai-compatible') return ['Start a local OpenAI-compatible server such as llama.cpp or LM Studio', 'Point IMAGE_MCP_LOCAL_ENDPOINT at its /v1 base URL', 'Set IMAGE_MCP_LOCAL_MODEL to the exposed model slug'];
+  return ['Set IMAGE_MCP_LOCAL_ENDPOINT to the running local service', 'Set IMAGE_MCP_LOCAL_MODEL to the exposed model slug'];
 }
-
-function providerKey(provider) {
-  if (provider === 'kilo') return configuredKey('KILO_API_KEY');
-  if (provider === 'openrouter') return configuredKey('OPENROUTER_API_KEY');
-  if (provider === 'openai') return configuredKey('OPENAI_API_KEY');
-  if (provider === 'gemini') return configuredKey('GEMINI_API_KEY');
-  if (provider === 'openai-compatible' || provider === 'comfyui' || provider === 'drawthings' || provider === 'mlx') return configuredKey('IMAGE_MCP_LOCAL_API_KEY');
+function localProviderWarnings(provider) {
+  if (provider === 'comfyui') return ['Requires a running ComfyUI server with a compatible workflow endpoint'];
+  if (provider === 'drawthings') return ['Requires the Draw Things local bridge endpoint'];
+  if (provider === 'mlx') return ['Requires a local MLX-VLM-compatible endpoint'];
+  if (provider === 'openai-compatible') return ['Requires a local OpenAI-compatible HTTP server such as llama.cpp or LM Studio'];
+  return ['Requires a reachable local HTTP image backend'];
+}
+function localProviderEndpointHint(provider) {
+  if (provider === 'comfyui') return 'http://127.0.0.1:8188';
+  if (provider === 'drawthings') return 'http://127.0.0.1:8000/v1';
+  if (provider === 'mlx') return 'http://127.0.0.1:8000/v1';
+  if (provider === 'openai-compatible') return 'http://127.0.0.1:8000/v1';
   return undefined;
 }
-
-function localProviderMode() {
-  return String(env('IMAGE_MCP_LOCAL_PROVIDER') || '').trim().toLowerCase();
-}
-
-function localEndpointBaseUrl() {
-  return String(env('IMAGE_MCP_LOCAL_ENDPOINT') || '').trim() || undefined;
-}
-
-function localModelName() {
-  return String(env('IMAGE_MCP_LOCAL_MODEL') || '').trim() || undefined;
-}
-
-function localTimeoutMs() {
-  const value = Number(env('IMAGE_MCP_LOCAL_TIMEOUT_MS') || '');
-  return Number.isFinite(value) && value > 0 ? value : 120000;
-}
-
-function localAutostartEnabled() {
-  return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_LOCAL_AUTOSTART').trim().toLowerCase());
-}
-
-function localBootstrapEnabled() {
-  return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_LOCAL_BOOTSTRAP').trim().toLowerCase());
-}
-
-function withoutBgDaemonUrl() {
-  const configured = env('WITHOUTBG_DAEMON_URL').trim();
-  return configured || 'http://127.0.0.1:8765';
-}
-
+function withoutBgDaemonUrl() { const configured = env('WITHOUTBG_DAEMON_URL').trim(); return configured || 'http://127.0.0.1:8765'; }
 let _cachedWithoutBgHealth = { ok: false, checkedAt: 0 };
-
-async function withoutBgDaemonHealthy() {
-  const now = Date.now();
-  if (now - _cachedWithoutBgHealth.checkedAt < 5000) return _cachedWithoutBgHealth.ok;
-  try {
-    const response = await axios.get(`${withoutBgDaemonUrl().replace(/\/$/, '')}/health`, { timeout: 2000 });
-    const ok = Boolean(response?.data?.ok ?? response?.data?.status === 'ok' ?? response?.status === 200);
-    _cachedWithoutBgHealth = { ok, checkedAt: now };
-    return ok;
-  } catch {
-    _cachedWithoutBgHealth = { ok: false, checkedAt: now };
-    return false;
+async function withoutBgDaemonHealthy() { const now = Date.now(); if (now - _cachedWithoutBgHealth.checkedAt < 5000) return _cachedWithoutBgHealth.ok; try { const response = await axios.get(`${withoutBgDaemonUrl().replace(/\/$/, '')}/health`, { timeout: 2000 }); const ok = Boolean(response?.data?.ok ?? response?.data?.status === 'ok' ?? response?.status === 200); _cachedWithoutBgHealth = { ok, checkedAt: now }; return ok; } catch { _cachedWithoutBgHealth = { ok: false, checkedAt: now }; return false; } }
+function providerFrom(value) { const provider = String(value || env('IMAGE_MCP_DEFAULT_PROVIDER') || 'kilo').toLowerCase(); return PROVIDERS.includes(provider) ? provider : 'kilo'; }
+function providerFromModel(model) { const value = String(model || '').trim().toLowerCase(); if (!value) return undefined; if (value.startsWith('gpt-image-') || value.startsWith('dall-e-') || value.startsWith('openai/')) return 'openai'; if (value.startsWith('google/gemini-') || value.startsWith('gemini-')) return 'gemini'; if (value.startsWith('black-forest-labs/') || value.startsWith('x-ai/') || value.startsWith('recraft/') || value.startsWith('sourceful/')) return 'openrouter'; if (value.startsWith('comfyui') || value.startsWith('drawthings') || value.startsWith('mlx')) return localProviderFrom() || 'openai-compatible'; return undefined; }
+function resolveProvider(args = {}) { const explicit = String(args.provider || '').trim(); if (explicit && explicit !== 'auto') return providerFrom(explicit); return providerFromModel(args.model) || providerFrom(); }
+function localProviderFrom() { const provider = localProviderMode(); return ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider) ? provider : undefined; }
+function defaultModel(provider) { const configured = env('IMAGE_MCP_DEFAULT_MODEL').trim(); return configured || DEFAULT_MODEL_BY_PROVIDER[provider] || DEFAULT_MODEL; }
+function imageModelFor(provider, args = {}) { if (args.model) return args.model; if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return localModelName() || DEFAULT_MODEL; if (provider === 'gemini') { const quality = String(args.quality || '').toLowerCase(); if (quality === 'quality') return 'gemini-3-pro-image-preview'; if (quality === 'balanced') return 'gemini-3.1-flash-image-preview'; return 'gemini-2.5-flash-image'; } if (provider === 'openrouter') { const quality = String(args.quality || '').toLowerCase(); if (quality === 'quality') return 'google/gemini-3-pro-image-preview'; if (quality === 'balanced') return 'google/gemini-3.1-flash-image-preview'; return 'google/gemini-2.5-flash-image'; } if (provider === 'openai') return 'gpt-image-1'; return defaultModel(provider); }
+function localInputMode(args = {}) {
+  return String(args.input_mode || '').toLowerCase() || (args.reference_image || args.input_images?.length ? 'image-to-image' : 'text-to-image');
+}
+function localGenerationRequest(provider, args = {}) {
+  const mode = localInputMode(args);
+  const model = imageModelFor(provider, args);
+  const inputImage = args.reference_image || args.input_image;
+  const base = { model, prompt: promptWithAspect(args), mode };
+  if (inputImage) base.input_image = inputImage;
+  if (Array.isArray(args.input_images) && args.input_images.length) base.input_images = args.input_images;
+  if (provider === 'comfyui') {
+    return { ...base, workflow: 'comfyui', endpoint: localEndpointBaseUrl() || localProviderEndpointHint('comfyui') };
   }
-}
-
-function execFileAsync(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    execFile(command, args, options, (error, stdout, stderr) => {
-      if (error) {
-        error.stdout = stdout;
-        error.stderr = stderr;
-        reject(error);
-        return;
-      }
-      resolve({ stdout, stderr });
-    });
-  });
-}
-
-async function withDaemonLock(fn) {
-  await ensureDir(path.dirname(WITHOUTBG_DAEMON_LOCK));
-  let handle;
-  try {
-    handle = await fs.open(WITHOUTBG_DAEMON_LOCK, 'wx');
-  } catch (error) {
-    if (error?.code !== 'EEXIST') throw error;
-    return fn(false);
+  if (provider === 'drawthings') {
+    return { ...base, bridge: 'drawthings', endpoint: localEndpointBaseUrl() || localProviderEndpointHint('drawthings') };
   }
-
-  try {
-    await handle.writeFile(JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }, null, 2));
-    return await fn(true);
-  } finally {
-    try {
-      await handle.close();
-    } catch {}
-    try {
-      await fs.unlink(WITHOUTBG_DAEMON_LOCK);
-    } catch {}
+  if (provider === 'mlx') {
+    return { ...base, adapter: 'mlx', endpoint: localEndpointBaseUrl() || localProviderEndpointHint('mlx') };
   }
+  return { ...base, adapter: 'openai-compatible', endpoint: localEndpointBaseUrl() || localProviderEndpointHint('openai-compatible') };
 }
-
-async function startWithoutBgDaemon() {
-  await execFileAsync('docker', ['compose', '-f', WITHOUTBG_DAEMON_COMPOSE, 'up', '-d'], {
-    cwd: SERVER_DIR,
-    timeout: 120000,
-    maxBuffer: 10 * 1024 * 1024
-  });
+function localEditRequest(provider, args = {}) {
+  const request = localGenerationRequest(provider, { ...args, input_mode: args.input_mode || 'image-to-image' });
+  request.reference_image = args.reference_image || args.input_image;
+  return request;
 }
-
-async function ensureWithoutBgDaemonRunning() {
-  if (await withoutBgDaemonHealthy()) return true;
-  if (!withoutBgAutostartEnabled()) return false;
-
-  return withDaemonLock(async (haveLock) => {
-    if (await withoutBgDaemonHealthy()) return true;
-    if (haveLock) {
-      try {
-        await startWithoutBgDaemon();
-      } catch (error) {
-        throw Object.assign(new Error(`withoutBG daemon autostart failed: ${error?.message || error?.code || 'unknown error'}`), {
-          code: 'daemon_start_failed',
-          retryable: false,
-          details: { daemonUrl: withoutBgDaemonUrl(), stdout: error?.stdout, stderr: error?.stderr }
-        });
-      }
-    }
-
-    const deadline = Date.now() + 60000;
-    while (Date.now() < deadline) {
-      if (await withoutBgDaemonHealthy()) return true;
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-    }
-
-    return false;
-  });
-}
-
-function providerKeyStatus(provider) {
-  const value = providerKey(provider);
-  if (!value) return { configured: false, length: 0 };
-  return {
-    configured: true,
-    length: value.length,
-    preview: `${value.slice(0, 4)}...${value.slice(-2)}`
-  };
-}
-
-function localProviderStatus(provider) {
-  const selected = localProviderFrom();
-  return {
-    configured: selected === provider,
-    endpoint: localEndpointBaseUrl() || undefined,
-    model: localModelName() || undefined,
-    autostart: localAutostartEnabled(),
-    bootstrap: localBootstrapEnabled()
-  };
-}
-
-function localRuntimeStatus() {
-  return {
-    provider: localProviderFrom() || undefined,
-    endpoint: localEndpointBaseUrl() || undefined,
-    model: localModelName() || undefined,
-    timeoutMs: localTimeoutMs(),
-    autostart: localAutostartEnabled(),
-    bootstrap: localBootstrapEnabled()
-  };
-}
-
-function requireProviderKey(provider) {
-  const key = providerKey(provider);
-  if (!key) {
-    throw Object.assign(new Error(`${provider} API key is not configured`), {
-      code: 'missing_api_key',
-      retryable: false,
-      details: { provider }
-    });
+function localBackendTemplate(provider, args = {}) {
+  const request = provider === 'comfyui' || provider === 'drawthings' || provider === 'mlx' || provider === 'openai-compatible'
+    ? localGenerationRequest(provider, args)
+    : localGenerationRequest('openai-compatible', args);
+  if (provider === 'comfyui') {
+    request.workflow = {
+      kind: 'workflow-json',
+      mode: localInputMode(args),
+      nodes: args.input_mode === 'inpainting-outpainting' ? ['load_image', 'mask_image', 'prompt', 'k_sampler'] : ['load_image', 'prompt', 'k_sampler']
+    };
   }
-  return key;
-}
-
-function validateStartup() {
-  const defaultProvider = providerFrom();
-  const configuredProviders = PROVIDERS.filter((provider) => Boolean(providerKey(provider)));
-
-  if (configuredProviders.length === 0) {
-    process.stderr.write(
-      JSON.stringify(
-        {
-          code: 'missing_api_key',
-          message: 'No provider API key is visible at startup; provider-specific tools will fail until one is injected.',
-          details: { provider: defaultProvider },
-          retryable: false
-        },
-        null,
-        2
-      ) + '\n'
-    );
+  if (provider === 'drawthings') {
+    request.bridge = { kind: 'drawthings-local', mode: localInputMode(args), transport: 'http' };
   }
-}
-
-function env(name) {
-  return process.env[name] || '';
-}
-
-function debugMode() {
-  return ['1', 'true', 'yes', 'on'].includes(env('IMAGE_MCP_DEBUG').toLowerCase());
-}
-
-function withoutBgAutostartEnabled() {
-  return ['1', 'true', 'yes', 'on'].includes(env('WITHOUTBG_AUTOSTART').toLowerCase());
-}
-
-function promptEnhancementEnabled() {
-  const value = env('IMAGE_MCP_PROMPT_ENHANCE').trim().toLowerCase();
-  if (!value) return true;
-  return ['1', 'true', 'yes', 'on'].includes(value);
-}
-
-function backgroundRemoveBackend(value) {
-  const backend = String(value || env('IMAGE_MCP_DEFAULT_BG_BACKEND') || 'rmbg').toLowerCase();
-  return BACKGROUND_REMOVE_BACKENDS.includes(backend) ? backend : 'rmbg';
-}
-
-let _cachedHintedOutputDir = null;
-
-async function resolveOutputDirHint() {
-  _cachedHintedOutputDir = await projectOutputDirFromHint();
-}
-
-function outputDir() {
-  if (_cachedHintedOutputDir) return _cachedHintedOutputDir;
-  const configured = env('IMAGE_MCP_OUTPUT_DIR').trim();
-  if (configured) return path.resolve(configured);
-  return path.resolve(process.cwd(), DEFAULT_OUTPUT_DIR);
-}
-
-async function readFirstExistingFile(paths) {
-  for (const candidate of paths) {
-    try {
-      return await fs.readFile(candidate, 'utf8');
-    } catch {
-      // ignore missing hint files
-    }
+  if (provider === 'mlx') {
+    request.adapter = { kind: 'mlx-vlm', mode: localInputMode(args), transport: 'http' };
   }
-  return undefined;
-}
-
-async function projectOutputDirFromHint() {
-  const explicit = env('IMAGE_MCP_PROJECT_OUTPUT_DIR').trim();
-  if (explicit) return path.resolve(explicit);
-
-  const raw = await readFirstExistingFile(PROJECT_OUTPUT_HINT_FILES.map((hint) => path.resolve(process.cwd(), hint)));
-  if (!raw) return undefined;
-
-  const trimmed = raw.trim();
-  if (!trimmed) return undefined;
-
-  if (trimmed.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (parsed && typeof parsed.outputDir === 'string' && parsed.outputDir.trim()) {
-        return path.resolve(parsed.outputDir.trim());
-      }
-      if (parsed && typeof parsed.output_path === 'string' && parsed.output_path.trim()) {
-        return path.resolve(parsed.output_path.trim());
-      }
-    } catch {
-      return undefined;
-    }
+  if (provider === 'openai-compatible') {
+    request.adapter = { kind: 'openai-compatible', mode: localInputMode(args), transport: 'http' };
   }
-
-  return path.resolve(trimmed);
+  return request;
 }
+function localProviderLabel(provider) { if (provider === 'openai-compatible') return 'OpenAI-compatible local endpoint'; if (provider === 'comfyui') return 'ComfyUI'; if (provider === 'drawthings') return 'Draw Things'; if (provider === 'mlx') return 'MLX-VLM'; return 'local provider'; }
+function normalizedQuality(args = {}) { const preset = String(args.quality || '').toLowerCase(); if (['fast', 'balanced', 'quality'].includes(preset)) return preset; return undefined; }
+function providerQuality(provider, args = {}) { const quality = normalizedQuality(args); if (!quality) return undefined; if (provider === 'openai' || provider === 'openrouter') return quality === 'fast' ? 'low' : quality === 'balanced' ? 'medium' : 'high'; return quality; }
+function modalitiesForModel(provider, model, requestedModalities) { if (Array.isArray(requestedModalities) && requestedModalities.length) return requestedModalities; if (provider === 'openrouter') { const imageOnlyModels = ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex', 'x-ai/grok-imagine-image-quality', 'bytedance-seed/seedream-4.5', 'sourceful/riverflow-v2-fast', 'sourceful/riverflow-v2-pro', 'recraft/recraft-v3']; if (imageOnlyModels.includes(model)) return ['image']; return ['image', 'text']; } return ['image', 'text']; }
+function aspectToSize(aspect) { if (aspect === 'landscape') return { width: 1536, height: 864 }; if (aspect === 'portrait') return { width: 864, height: 1536 }; return { width: 1024, height: 1024 }; }
+function dimensions(args = {}) { if (Number.isFinite(args.width) && Number.isFinite(args.height)) return { width: args.width, height: args.height }; if (typeof args.size === 'string' && args.size.includes('x')) { const [width, height] = args.size.split('x').map(Number); if (Number.isFinite(width) && Number.isFinite(height)) return { width, height }; } if (args.aspect) return aspectToSize(args.aspect); return aspectToSize('square'); }
+function promptWithAspect(args) { const segments = []; if (args.purpose) segments.push(`Purpose: ${args.purpose}.`); if (args.aspect) segments.push(`Aspect ratio: ${args.aspect}.`); if (args.quality) segments.push(`Quality target: ${args.quality}.`); if (args.style) segments.push(`Style: ${args.style}.`); if (args.steps) segments.push(`Generation steps: ${args.steps}.`); segments.push(args.prompt); return segments.join(' ').trim(); }
+function base64Prefix(data) { return data.startsWith('data:') ? data : `data:image/png;base64,${data}`; }
+async function readImageBuffer(input) { if (!input) return undefined; if (input.startsWith('data:')) { const base64 = input.split(',').pop() || ''; return Buffer.from(base64, 'base64'); } if (/^https?:\/\//.test(input)) { const response = await axios.get(input, { responseType: 'arraybuffer' }); return Buffer.from(response.data); } return fs.readFile(path.resolve(input)); }
+async function writeImage(outputPath, b64) { if (!outputPath) return undefined; const target = path.resolve(outputPath); await fs.writeFile(target, Buffer.from(b64, 'base64')); return target; }
+async function ensureDir(dir) { await fs.mkdir(dir, { recursive: true }); }
+function outputDir() { return env('IMAGE_MCP_PROJECT_OUTPUT_DIR').trim() || DEFAULT_OUTPUT_DIR; }
+async function resolveOutputDirHint() { await ensureDir(outputDir()); }
+function defaultSavedImagePath(prefix = 'image') { return path.join(outputDir(), `${prefix}.png`); }
+function imageToolContent(result) { const lines = []; if (result?.output_path) lines.push(`- Path: \`${result.output_path}\``); if (result?.mimeType) lines.push(`- MIME type: \`${result.mimeType}\``); if (result?.bytes) lines.push(`- Size: \`${result.bytes}\``); if (result?.model) lines.push(`- Model: \`${result.model}\``); if (result?.backend) lines.push(`- Backend: \`${result.backend}\``); if (result?.action) lines.push(`- Action: \`${result.action}\``); return [{ type: 'text', text: lines.join('\n') || 'done' }]; }
+function validateArgs(args) { if (!args.prompt) throw new Error('prompt is required'); }
+function validateProcessingArgs(args) { if (!args.input_image) throw new Error('input_image is required'); }
+function validateOptimizeArgs(args) { if (!args.input_image) throw new Error('input_image is required'); }
+function providerKeyStatus(provider) { const value = providerKey(provider); if (!value) return { configured: false, length: 0 }; return { configured: true, length: value.length, preview: `${value.slice(0, 4)}...${value.slice(-2)}` }; }
+function providerWarnings(provider) { const warnings = []; if (provider === 'gemini') warnings.push('Image edits are not supported by this provider'); if (provider === 'openai-compatible') warnings.push('Requires a local OpenAI-compatible HTTP server'); if (provider === 'comfyui') warnings.push('Requires a running ComfyUI HTTP server and a compatible workflow endpoint'); if (provider === 'drawthings') warnings.push('Requires a running Draw Things local bridge endpoint'); if (provider === 'mlx') warnings.push('Requires a local MLX-VLM compatible OpenAI-style endpoint'); return warnings; }
+function providerModelFamily(provider) { if (provider === 'gemini') return 'gemini'; if (provider === 'comfyui' || provider === 'drawthings' || provider === 'mlx') return 'local'; if (provider === 'kilo' || provider === 'openrouter' || provider === 'openai' || provider === 'openai-compatible') return 'chat-image'; return 'general'; }
+function localProviderStatus(provider) { const selected = localProviderFrom(); const endpoint = localEndpointBaseUrl() || localProviderEndpointHint(provider); const warnings = localProviderWarnings(provider); if (selected !== provider) warnings.push(`Set IMAGE_MCP_LOCAL_PROVIDER=${provider} to activate this backend`); return { configured: selected === provider, endpoint: endpoint || undefined, model: localModelName() || undefined, autostart: localAutostartEnabled(), bootstrap: localBootstrapEnabled(), generate: true, edit: true, warnings }; }
+function localRuntimeStatus() { return { provider: localProviderFrom() || undefined, endpoint: localEndpointBaseUrl() || undefined, model: localModelName() || undefined, timeoutMs: localTimeoutMs(), autostart: localAutostartEnabled(), bootstrap: localBootstrapEnabled() }; }
+function requireProviderKey(provider) { const key = providerKey(provider); if (!key) throw Object.assign(new Error(`${provider} API key is not configured`), { code: 'missing_api_key', retryable: false, details: { provider } }); return key; }
+function validateStartup() {}
 
-async function ensureDir(dir) {
-  await fs.mkdir(dir, { recursive: true });
-  return dir;
-}
+const taskRegistry = new Map(); let taskSeq = 0;
+function nextTaskId() { taskSeq += 1; return `task_${String(taskSeq).padStart(4, '0')}`; }
+function registerTask({ provider, model, prompt, action, output_path }) { const task_id = nextTaskId(); const task = { task_id, status: 'queued', provider, model, prompt, action, output_path, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; taskRegistry.set(task_id, task); return task; }
+async function runTask(task, runner) { task.status = 'running'; task.updated_at = new Date().toISOString(); try { const result = await runner(); task.status = 'completed'; task.result = result; task.updated_at = new Date().toISOString(); return task; } catch (error) { task.status = 'failed'; task.error = String(error?.message || error); task.updated_at = new Date().toISOString(); throw error; } }
+function getTask(task_id) { return taskRegistry.get(String(task_id || '')); }
 
-async function ensureOutputDir() {
-  return ensureDir(outputDir());
-}
+async function generateImage(args) { const provider = resolveProvider(args); if (provider === 'kilo') return { ...(await kiloImagesGenerations(args)) }; if (provider === 'openrouter') return { ...(await openrouterImagesGenerations(args)) }; if (provider === 'openai') return { ...(await openaiImageGenerations(args)) }; if (provider === 'gemini') return { ...(await geminiImageGenerations(args)) }; if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return { ...(await providerChatCompletion(provider, localBackendTemplate(provider, args))) }; return { ...(await providerChatCompletion(provider, args)) }; }
+async function submitTask(args) { const provider = resolveProvider(args); const model = imageModelFor(provider, args); const task = registerTask({ provider, model, prompt: args.prompt, action: 'generate_image', output_path: args.output_path }); queueMicrotask(async () => { try { await runTask(task, () => generateImage({ ...args, provider, model })); } catch {} }); return task; }
+async function batchGenerateImage(args) { const count = Math.max(1, Number(args.count) || 1); const results = []; for (let index = 0; index < count; index += 1) { const output_path = args.output_path ? args.output_path.replace(/(\.[a-z0-9]+)?$/i, `-${String(index + 1).padStart(2, '0')}$1`) : defaultSavedImagePath(`batch-${String(index + 1).padStart(2, '0')}`); results.push(await generateImage({ ...args, output_path })); } return { type: 'batch', results, count }; }
+async function listImageModels() { const providerMeta = (provider, value) => ({ ...value, family: providerModelFamily(provider), warnings: [...providerWarnings(provider), ...(value?.warnings || [])] }); return { defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, providers: { kilo: providerMeta('kilo', { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations', generate: true, edit: true }), openrouter: providerMeta('openrouter', { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions', generate: true, edit: true }), openai: providerMeta('openai', { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions', generate: true, edit: true }), gemini: providerMeta('gemini', { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false }), 'openai-compatible': providerMeta('openai-compatible', localProviderStatus('openai-compatible')), comfyui: providerMeta('comfyui', localProviderStatus('comfyui')), drawthings: providerMeta('drawthings', localProviderStatus('drawthings')), mlx: providerMeta('mlx', localProviderStatus('mlx')) }, models: Object.fromEntries(Object.entries(KNOWN_MODELS).map(([provider, models]) => [provider, { family: providerModelFamily(provider), warnings: providerWarnings(provider), models }])), outputDir: outputDir() }; }
+async function editImage(args) { const provider = resolveProvider(args); if (provider === 'kilo') return kiloImageEdits(args); if (provider === 'openai') return openaiImageEdits(args); if (provider === 'openrouter') return openrouterImageEdits(args); if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return providerChatCompletion(provider, localBackendTemplate(provider, localEditRequest(provider, { ...args, prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.` }))); return providerChatCompletion(provider, { ...args, input_image: args.reference_image || args.input_image, prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.` }); }
+async function getProviderStatus() { return { version: VERSION, defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])), capabilities: { kilo: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openrouter: { chat_image_generation: true, output_modalities: ['image', 'text'], response_shapes: ['choices[0].message.images', 'choices[0].message.content', 'data.output', 'data'], generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openai: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, gemini: { generate: true, edit: false, batch: false, async: false, localEndpoint: false }, 'openai-compatible': { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, comfyui: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, drawthings: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, mlx: { generate: true, edit: true, batch: false, async: false, localEndpoint: true } }, runtime: { defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined, defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined, outputDir: outputDir(), local: { provider: localProviderFrom() || undefined, endpoint: localEndpointBaseUrl() || undefined, model: localModelName() || undefined, timeoutMs: localTimeoutMs(), autostart: localAutostartEnabled(), bootstrap: localBootstrapEnabled(), setup: localSetupInstructions(localProviderFrom() || 'openai-compatible') } } }; }
 
-function mimeFromDataUrl(url) {
-  const match = String(url || '').match(/^data:([^;,]+)(?:;[^,]+)*;base64,(.+)$/i);
-  if (!match) return { mimeType: 'image/png', base64: undefined };
-  return { mimeType: match[1], base64: match[2] };
-}
-
-function normalizeBase64Payload(value) {
-  if (!value || typeof value !== 'string') return undefined;
-  if (value.startsWith('data:')) return mimeFromDataUrl(value).base64;
-  return value;
-}
-
-function providerFrom(value) {
-  const provider = String(value || env('IMAGE_MCP_DEFAULT_PROVIDER') || 'kilo').toLowerCase();
-  return PROVIDERS.includes(provider) ? provider : 'kilo';
-}
-
-function localProviderFrom() {
-  const provider = localProviderMode();
-  return ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider) ? provider : undefined;
-}
-
-function defaultModel(provider) {
-  const configured = env('IMAGE_MCP_DEFAULT_MODEL').trim();
-  return configured || DEFAULT_MODEL_BY_PROVIDER[provider] || DEFAULT_MODEL;
-}
-
-function modelFor(provider, model) {
-  if (model) return model;
-  return defaultModel(provider);
-}
-
-function imageModelFor(provider, args = {}) {
-  if (args.model) return args.model;
-  if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return localModelName() || DEFAULT_MODEL;
-  if (provider === 'gemini') {
-    const quality = String(args.quality || '').toLowerCase();
-    if (quality === 'quality') return 'gemini-3-pro-image-preview';
-    if (quality === 'balanced') return 'gemini-3.1-flash-image-preview';
-    return 'gemini-2.5-flash-image';
-  }
-  if (provider === 'openrouter') {
-    const quality = String(args.quality || '').toLowerCase();
-    if (quality === 'quality') return 'google/gemini-3-pro-image-preview';
-    if (quality === 'balanced') return 'google/gemini-3.1-flash-image-preview';
-    return 'google/gemini-2.5-flash-image';
-  }
-  if (provider === 'openai') return 'gpt-image-1';
-  return defaultModel(provider);
-}
-
-function localProviderLabel(provider) {
-  if (provider === 'openai-compatible') return 'OpenAI-compatible local endpoint';
-  if (provider === 'comfyui') return 'ComfyUI';
-  if (provider === 'drawthings') return 'Draw Things';
-  if (provider === 'mlx') return 'MLX-VLM';
-  return 'local provider';
-}
-
-function normalizedQuality(args = {}) {
-  const preset = String(args.quality || '').toLowerCase();
-  if (['fast', 'balanced', 'quality'].includes(preset)) return preset;
-  return undefined;
-}
-
-function providerQuality(provider, args = {}) {
-  const quality = normalizedQuality(args);
-  if (!quality) return undefined;
-  if (provider === 'openai' || provider === 'openrouter') {
-    return quality === 'fast' ? 'low' : quality === 'balanced' ? 'medium' : 'high';
-  }
-  return quality;
-}
-
-function modalitiesForModel(provider, model, requestedModalities) {
-  if (Array.isArray(requestedModalities) && requestedModalities.length) return requestedModalities;
-  if (provider === 'openrouter') {
-    const imageOnlyModels = ['black-forest-labs/flux.2-pro', 'black-forest-labs/flux.2-flex', 'x-ai/grok-imagine-image-quality', 'bytedance-seed/seedream-4.5', 'sourceful/riverflow-v2-fast', 'sourceful/riverflow-v2-pro', 'recraft/recraft-v3'];
-    if (imageOnlyModels.includes(model)) return ['image'];
-    return ['image', 'text'];
-  }
-  return ['image', 'text'];
-}
-
-function aspectToSize(aspect) {
-  if (aspect === 'landscape') return { width: 1536, height: 864 };
-  if (aspect === 'portrait') return { width: 864, height: 1536 };
-  return { width: 1024, height: 1024 };
-}
-
-function dimensions(args = {}) {
-  if (Number.isFinite(args.width) && Number.isFinite(args.height)) {
-    return { width: args.width, height: args.height };
-  }
-  if (typeof args.size === 'string' && args.size.includes('x')) {
-    const [width, height] = args.size.split('x').map(Number);
-    if (Number.isFinite(width) && Number.isFinite(height)) return { width, height };
-  }
-  if (args.aspect) return aspectToSize(args.aspect);
-  return aspectToSize('square');
-}
-
-function promptWithAspect(args) {
-  const segments = [];
-  if (args.purpose) segments.push(`Purpose: ${args.purpose}.`);
-  if (args.aspect) segments.push(`Aspect ratio: ${args.aspect}.`);
-  if (args.quality) segments.push(`Quality target: ${args.quality}.`);
-  if (args.style) segments.push(`Style: ${args.style}.`);
-  if (args.steps) segments.push(`Generation steps: ${args.steps}.`);
-  if (promptEnhancementEnabled()) {
-    const promptHints = [];
-    const purpose = String(args.purpose || '').toLowerCase();
-    const style = String(args.style || '').toLowerCase();
-    const quality = String(args.quality || '').toLowerCase();
-
-    if (purpose.includes('logo') || purpose.includes('icon') || purpose.includes('brand')) {
-      promptHints.push('Design it as a clean, recognizable mark with crisp edges, simple geometry, and strong negative space.');
-    }
-    if (purpose.includes('header') || purpose.includes('banner')) {
-      promptHints.push('Compose it with extra breathing room and a clear focal point so it reads well in a website header.');
-    }
-    if (style.includes('photoreal') || style.includes('realistic') || style.includes('realism')) {
-      promptHints.push('Use natural lighting, believable materials, and realistic surface detail without over-sharpening.');
-    }
-    if (style.includes('vector') || style.includes('flat') || style.includes('minimal')) {
-      promptHints.push('Keep the rendering flat, structured, and icon-friendly with limited gradients and no texture noise.');
-    }
-    if (quality === 'quality') {
-      promptHints.push('Prioritize detail fidelity, clean composition, and artifact-free edges.');
-    }
-    if (quality === 'balanced') {
-      promptHints.push('Balance visual quality with clarity and avoid unnecessary complexity.');
-    }
-    if (quality === 'fast') {
-      promptHints.push('Keep the composition simple so the result stays readable at lower compute budgets.');
-    }
-
-    if (promptHints.length) segments.push(`Enhance prompt: ${promptHints.join(' ')}`);
-  }
-  segments.push(args.prompt);
-  return segments.join(' ').trim();
-}
-
-function base64Prefix(data) {
-  return data.startsWith('data:') ? data : `data:image/png;base64,${data}`;
-}
-
-async function readImageInput(input) {
-  if (!input) return undefined;
-  if (/^https?:\/\//.test(input) || input.startsWith('data:')) return input;
-  const resolved = path.resolve(input);
-  const buffer = await fs.readFile(resolved);
-  const ext = path.extname(resolved).toLowerCase();
-  const mimeType = ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.webp' ? 'image/webp' : ext === '.gif' ? 'image/gif' : 'image/png';
-  return `data:${mimeType};base64,${buffer.toString('base64')}`;
-}
-
-async function readImageBuffer(input) {
-  if (!input) return undefined;
-  if (input.startsWith('data:')) {
-    const base64 = input.split(',').pop() || '';
-    return Buffer.from(base64, 'base64');
-  }
-  if (/^https?:\/\//.test(input)) {
-    const response = await axios.get(input, { responseType: 'arraybuffer' });
-    return Buffer.from(response.data);
-  }
-  const resolved = path.resolve(input);
-  return fs.readFile(resolved);
-}
-
-async function writeImage(outputPath, b64) {
-  if (!outputPath) return undefined;
-  const target = path.resolve(outputPath);
-  await fs.writeFile(target, Buffer.from(b64, 'base64'));
-  return target;
-}
-
-function normalizeOutputPath(outputPath, fallbackPrefix) {
-  if (outputPath && typeof outputPath === 'string' && outputPath.trim()) {
-    return path.resolve(process.cwd(), outputPath);
-  }
-  return path.join(process.cwd(), DEFAULT_OUTPUT_DIR, outputFileName(fallbackPrefix));
-}
-
-async function writeImageResult(result, outputPath) {
-  if (!result?.data) return result;
-  const baseDir = await ensureOutputDir();
-  const target = outputPath ? normalizeOutputPath(outputPath, 'image') : path.join(baseDir, outputFileName('image'));
-  await ensureDir(path.dirname(target));
-  const decoded = result.data.startsWith('data:') ? mimeFromDataUrl(result.data) : { mimeType: result.mimeType || 'image/png', base64: result.data };
-  await fs.writeFile(target, Buffer.from(decoded.base64, 'base64'));
-  return { ...result, mimeType: decoded.mimeType, output_path: target, bytes: Buffer.byteLength(decoded.base64, 'base64') };
-}
-
-function uniqueOutputPath(outputPath, suffix) {
-  if (!outputPath) return undefined;
-  const resolved = normalizeOutputPath(outputPath, 'image');
-  const ext = path.extname(resolved);
-  const base = resolved.slice(0, resolved.length - ext.length);
-  return `${base}${suffix}${ext || '.png'}`;
-}
-
-function inspectionOutputPath(outputPath, fallbackPrefix = 'image') {
-  if (outputPath) return uniqueOutputPath(outputPath, '-inspect');
-  return path.join(outputDir(), outputFileName(`${fallbackPrefix}-inspect`));
-}
-
-function outputFileName(prefix = 'image') {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `${prefix}-${stamp}.png`;
-}
-
-function imageTextResult(b64, outputPath) {
-  return JSON.stringify({ type: 'image', data: b64, mimeType: 'image/png', output_path: outputPath || undefined }, null, 2);
-}
-
-function imageToolContent(result) {
-  const mimeType = result.mimeType || 'image/png';
-  const lines = ['### Image saved', `- Path: \`${result.output_path || 'not saved to disk'}\``, `- MIME type: \`${mimeType}\``];
-  if (Number.isFinite(result.bytes)) lines.push(`- Size: \`${result.bytes} bytes\``);
-  if (result.provider) lines.push(`- Provider: \`${result.provider}\``);
-  if (result.model) lines.push(`- Model: \`${result.model}\``);
-  if (result.backend) lines.push(`- Backend: \`${result.backend}\``);
-  if (result.action) lines.push(`- Action: \`${result.action}\``);
-  if (debugMode() && result.response) {
-    const responseText = typeof result.response === 'string' ? result.response : JSON.stringify(result.response).slice(0, 500);
-    lines.push(`- Response: \`${responseText}\``);
-  }
-  const content = [
-    {
-      type: 'resource_link',
-      name: path.basename(result.output_path || 'image.png'),
-      uri: pathToFileURL(result.output_path || path.resolve(process.cwd(), 'generated-images', 'image.png')).href,
-      mimeType
-    }
+function createServerContext() {
+  const tools = [
+    { name: 'kilo_generate_image', description: 'Generate an image using the configured provider.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, quality: { type: 'string' }, purpose: { type: 'string' }, style: { type: 'string' }, size: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] }, steps: { type: 'number' }, input_mode: { type: 'string', enum: ['text-to-image', 'image-to-image', 'inpainting-outpainting', 'local-file', 'remote-url'] }, input_image: { type: 'string' }, reference_image: { type: 'string' }, output_path: { type: 'string' } }, required: ['prompt'] } },
+    { name: 'generate_image', description: 'Generate images using the selected provider.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, purpose: { type: 'string' }, style: { type: 'string' }, size: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] }, steps: { type: 'number' }, input_mode: { type: 'string', enum: ['text-to-image', 'image-to-image', 'inpainting-outpainting', 'local-file', 'remote-url'] }, input_image: { type: 'string' }, input_images: { type: 'array', items: { type: 'string' } }, reference_image: { type: 'string' }, modalities: { type: 'array', items: { type: 'string' } }, quality: { type: 'string' }, background: { type: 'string' }, output_format: { type: 'string' }, moderation: { type: 'string' }, max_tokens: { type: 'number' }, output_path: { type: 'string' } }, required: ['prompt'] } },
+    { name: 'list_image_models', description: 'List available providers, defaults, model families, and edit capability.', inputSchema: { type: 'object', properties: {} } },
+    { name: 'get_provider_status', description: 'Report configured providers, defaults, and server version.', inputSchema: { type: 'object', properties: {} } },
+    { name: 'get_model_capabilities', description: 'Summarize which providers can generate, edit, batch, or use local endpoints.', inputSchema: { type: 'object', properties: {} } },
+    { name: 'edit_image', description: 'Edit an image using a reference image and prompt.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, quality: { type: 'string' }, size: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] }, steps: { type: 'number' }, input_mode: { type: 'string', enum: ['text-to-image', 'image-to-image', 'inpainting-outpainting', 'local-file', 'remote-url'] }, input_image: { type: 'string' }, reference_image: { type: 'string' }, output_path: { type: 'string' } }, required: ['prompt', 'input_image'] } },
+    { name: 'background_remove', description: 'Remove the background from an image with a local segmentation model or the shared withoutBG Docker daemon and preserve transparency in the PNG output.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS }, model: { type: 'string' }, max_resolution: { type: 'number' }, alpha_feather: { type: 'number' }, alpha_threshold: { type: 'number' }, output_path: { type: 'string' } }, required: ['input_image'] } },
+    { name: 'finalize_image', description: 'Finalize an image locally by optionally removing the background with local or daemon-backed matting and then cropping, trimming, resizing, and saving a PNG.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, remove_background: { type: 'boolean' }, background_backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS }, background_model: { type: 'string' }, max_resolution: { type: 'number' }, alpha_feather: { type: 'number' }, alpha_threshold: { type: 'number' }, trim: { type: 'boolean' }, width: { type: 'number' }, height: { type: 'number' }, fit: { type: 'string', enum: PROCESSING_FITS }, gravity: { type: 'string' }, background: { type: 'string' }, output_path: { type: 'string' } }, required: ['input_image'] } },
+    { name: 'resize_image', description: 'Resize an image locally with aspect-ratio-preserving defaults and PNG output.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, output_path: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, fit: { type: 'string', enum: PROCESSING_FITS }, background: { type: 'string' } }, required: ['input_image'] } },
+    { name: 'auto_crop', description: 'Crop an image locally to a target aspect or requested dimensions.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, output_path: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, gravity: { type: 'string' } }, required: ['input_image'] } },
+    { name: 'optimize_image', description: 'Optimize an image for the web by re-encoding it as compressed PNG, WebP, JPEG, or AVIF with metadata stripped.', inputSchema: { type: 'object', properties: { input_image: { type: 'string' }, output_path: { type: 'string' }, output_format: { type: 'string', enum: OPTIMIZE_FORMATS }, quality: { type: 'number' }, compression_level: { type: 'number' }, lossless: { type: 'boolean' }, background: { type: 'string' }, palette: { type: 'boolean' } }, required: ['input_image'] } },
+    { name: 'submit_task', description: 'Submit an image generation task for asynchronous execution and poll it later with get_task.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, output_path: { type: 'string' } }, required: ['prompt'] } },
+    { name: 'get_task', description: 'Get the current status and result for a submitted image task.', inputSchema: { type: 'object', properties: { task_id: { type: 'string' } }, required: ['task_id'] } },
+    { name: 'batch_generate_image', description: 'Generate a batch of images from one prompt, preserving unique filenames for each result.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, count: { type: 'number' }, output_path: { type: 'string' } }, required: ['prompt'] } }
   ];
-  content.push({
-    type: 'text',
-    text: lines.join('\n')
-  });
-  return content;
-}
-
-function defaultSavedImagePath(prefix = 'image') {
-  return path.join(outputDir(), outputFileName(prefix));
-}
-
-function normalizeImagePart(part) {
-  if (!part) return undefined;
-  if (part.b64_json) return part.b64_json;
-  if (part.type === 'output_image' && part.image_url?.url) return part.image_url.url.split(',').pop();
-  if (typeof part === 'string') return part.startsWith('data:') ? part.split(',').pop() : part;
-  if (part.image_url?.url) return part.image_url.url.split(',').pop();
-  if (part.imageUrl?.url) return part.imageUrl.url.split(',').pop();
-  if (part.url) return part.url.split(',').pop();
-  if (part.data) return part.data;
-  if (part.result) return normalizeBase64Payload(part.result);
-  return undefined;
-}
-
-function collectImageParts(node, results = []) {
-  if (!node) return results;
-  if (Array.isArray(node)) {
-    for (const entry of node) collectImageParts(entry, results);
-    return results;
-  }
-
-  const candidates = [
-    node,
-    node.message,
-    node.message?.content,
-    node.message?.images,
-    node.choices?.[0]?.message?.images,
-    node.choices?.[0]?.message?.content,
-    node.choices?.[0]?.message,
-    node.content,
-    node.images,
-    node.output,
-    node.data,
-    node.result
-  ];
-
-  for (const candidate of candidates) {
-    if (!candidate) continue;
-    if (Array.isArray(candidate)) {
-      for (const part of candidate) {
-        if (!part) continue;
-        if (typeof part === 'string') {
-          const stringPayload = normalizeBase64Payload(part);
-          if (stringPayload) results.push({ data: stringPayload, mimeType: mimeFromDataUrl(part).mimeType });
-          continue;
-        }
-        const url = part?.image_url?.url || part?.imageUrl?.url || part?.url;
-        const data = normalizeBase64Payload(url) || normalizeBase64Payload(part?.data) || normalizeBase64Payload(part?.b64_json) || normalizeBase64Payload(part?.imageB64) || normalizeBase64Payload(part?.result) || normalizeBase64Payload(part?.imageUrl?.url);
-        if (data) results.push({ data, mimeType: part?.mime_type || part?.mimeType || mimeFromDataUrl(url || part?.data || '').mimeType });
-      }
-      continue;
-    }
-
-    if (typeof candidate === 'string') {
-      const stringPayload = normalizeBase64Payload(candidate);
-      if (stringPayload) {
-        results.push({ data: stringPayload, mimeType: mimeFromDataUrl(candidate).mimeType });
-      }
-      continue;
-    }
-
-    const url = candidate?.image_url?.url || candidate?.imageUrl?.url || candidate?.url;
-    const data = normalizeBase64Payload(url) || normalizeBase64Payload(candidate?.data) || normalizeBase64Payload(candidate?.b64_json) || normalizeBase64Payload(candidate?.imageB64) || normalizeBase64Payload(candidate?.result) || normalizeBase64Payload(candidate?.imageUrl?.url);
-    if (data) results.push({ data, mimeType: candidate?.mime_type || candidate?.mimeType || mimeFromDataUrl(url || candidate?.data || '').mimeType });
-  }
-
-  return results;
-}
-
-function extractImagePayload(response) {
-  return collectImageParts(response)[0]?.data;
-}
-
-function extractImagePayloads(response) {
-  return collectImageParts(response);
-}
-
-function validateArgs(args) {
-  if (!args.prompt || typeof args.prompt !== 'string') {
-    throw Object.assign(new Error('prompt is required'), { code: 'validation_error', retryable: false });
-  }
-  if (args.aspect && !['square', 'landscape', 'portrait'].includes(args.aspect)) {
-    throw Object.assign(new Error('aspect must be square, landscape, or portrait'), { code: 'validation_error', retryable: false });
-  }
-  if (args.size && typeof args.size !== 'string') {
-    throw Object.assign(new Error('size must be a string like 1024x1024'), { code: 'validation_error', retryable: false });
-  }
-  if (args.input_images && !Array.isArray(args.input_images)) {
-    throw Object.assign(new Error('input_images must be an array of strings'), { code: 'validation_error', retryable: false });
-  }
-  if (args.modalities && !Array.isArray(args.modalities)) {
-    throw Object.assign(new Error('modalities must be an array of strings'), { code: 'validation_error', retryable: false });
-  }
-  if (args.quality && typeof args.quality !== 'string') {
-    throw Object.assign(new Error('quality must be a string'), { code: 'validation_error', retryable: false });
-  }
-  if (args.output_path && typeof args.output_path !== 'string') {
-    throw Object.assign(new Error('output_path must be a string'), { code: 'validation_error', retryable: false });
-  }
-  if (args.reference_image && typeof args.reference_image !== 'string') {
-    throw Object.assign(new Error('reference_image must be a string'), { code: 'validation_error', retryable: false });
-  }
-  if (args.input_image && typeof args.input_image !== 'string') {
-    throw Object.assign(new Error('input_image must be a string'), { code: 'validation_error', retryable: false });
-  }
-}
-
-function validateProcessingArgs(args) {
-  if (!args.input_image || typeof args.input_image !== 'string') {
-    throw Object.assign(new Error('input_image is required'), { code: 'validation_error', retryable: false });
-  }
-  if (args.output_path && typeof args.output_path !== 'string') {
-    throw Object.assign(new Error('output_path must be a string'), { code: 'validation_error', retryable: false });
-  }
-  if (args.width !== undefined && !Number.isFinite(args.width)) {
-    throw Object.assign(new Error('width must be a number'), { code: 'validation_error', retryable: false });
-  }
-  if (args.height !== undefined && !Number.isFinite(args.height)) {
-    throw Object.assign(new Error('height must be a number'), { code: 'validation_error', retryable: false });
-  }
-  if (args.fit && !PROCESSING_FITS.includes(args.fit)) {
-    throw Object.assign(new Error(`fit must be one of ${PROCESSING_FITS.join(', ')}`), { code: 'validation_error', retryable: false });
-  }
-  if (args.backend && typeof args.backend !== 'string') {
-    throw Object.assign(new Error(`backend must be one of ${BACKGROUND_REMOVE_BACKENDS.join(', ')}`), { code: 'validation_error', retryable: false });
-  }
-  const backend = backgroundRemoveBackend(args.backend);
-  if (args.model && typeof args.model !== 'string') {
-    throw Object.assign(new Error('model must be a string'), { code: 'validation_error', retryable: false });
-  }
-  if (backend === 'rmbg' && args.model && !BACKGROUND_REMOVE_MODELS.includes(String(args.model).toLowerCase())) {
-    throw Object.assign(new Error(`model must be one of ${BACKGROUND_REMOVE_MODELS.join(', ')}`), { code: 'validation_error', retryable: false });
-  }
-  if (backend === 'imgly' && args.model && !IMGLY_BACKGROUND_REMOVE_MODELS.includes(String(args.model).toLowerCase())) {
-    throw Object.assign(new Error(`model must be one of ${IMGLY_BACKGROUND_REMOVE_MODELS.join(', ')}`), { code: 'validation_error', retryable: false });
-  }
-  if (args.max_resolution !== undefined && !Number.isFinite(args.max_resolution)) {
-    throw Object.assign(new Error('max_resolution must be a number'), { code: 'validation_error', retryable: false });
-  }
-  if (args.max_resolution !== undefined && args.max_resolution <= 0) {
-    throw Object.assign(new Error('max_resolution must be greater than 0'), { code: 'validation_error', retryable: false });
-  }
-  if (args.alpha_feather !== undefined && (!Number.isFinite(args.alpha_feather) || args.alpha_feather < 0)) {
-    throw Object.assign(new Error('alpha_feather must be a number greater than or equal to 0'), { code: 'validation_error', retryable: false });
-  }
-  if (args.alpha_threshold !== undefined && (!Number.isFinite(args.alpha_threshold) || args.alpha_threshold < 0 || args.alpha_threshold > 255)) {
-    throw Object.assign(new Error('alpha_threshold must be a number between 0 and 255'), { code: 'validation_error', retryable: false });
-  }
-}
-
-function errorResult(error) {
-  const payload = {
-    code: error?.code || 'image_mcp_error',
-    message: error instanceof Error ? error.message : String(error),
-    retryable: Boolean(error?.retryable)
-  };
-  if (debugMode()) {
-    payload.details = error?.details || undefined;
-    payload.response = error?.response?.data || error?.response || undefined;
-    payload.stack = error instanceof Error ? error.stack : undefined;
-  }
-  return JSON.stringify(payload, null, 2);
-}
-
-async function kiloImagesGenerations(args) {
-  const prompt = promptWithAspect(args);
-  const image = await readImageInput(args.input_image);
-  const response = await axios.post(
-    'https://api.kilo.ai/api/gateway/chat/completions',
-    {
-      model: modelFor('kilo', args.model),
-      messages: [
-        {
-          role: 'user',
-          content: image
-            ? [
-                { type: 'text', text: prompt },
-                { type: 'image_url', image_url: { url: image } }
-              ]
-            : [{ type: 'text', text: prompt }]
-        }
-      ],
-      modalities: ['image', 'text']
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${requireProviderKey('kilo')}`,
-        'Content-Type': 'application/json',
-      'X-KiloCode-EditorName': 'img-gen-mcp'
-      }
-    }
-  );
-
-  const content = response?.data?.choices?.[0]?.message?.content;
-  const parts = Array.isArray(content) ? content : content ? [content] : [];
-  const imagePart = parts.find((part) => part?.type === 'image_url' || part?.type === 'image' || part?.image_url || part?.url || part?.b64_json || part?.data);
-  const b64 = normalizeImagePart(imagePart);
-  if (!b64) throw Object.assign(new Error('Provider image response did not include an image payload'), { retryable: false, response: response?.data });
-  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
-  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
-}
-
-async function kiloImageEdits(args) {
-  const { width, height } = dimensions(args);
-  const image = await readImageInput(args.reference_image || args.input_image);
-  const payload = {
-    model: modelFor('kilo', args.model),
-    prompt: promptWithAspect(args),
-    width,
-    height,
-    ...(args.steps ? { steps: args.steps } : {}),
-    input_image: image
-  };
-  const response = await axios.post(
-    'https://api.kilo.ai/api/gateway/images/edits',
-    payload,
-    { headers: { Authorization: `Bearer ${requireProviderKey('kilo')}`, 'Content-Type': 'application/json' } }
-  );
-
-  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.image?.b64_json;
-  if (!b64) throw Object.assign(new Error('Provider edit response did not include image data'), { retryable: false, response: response?.data });
-  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
-  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
-}
-
-async function openaiImageEdits(args) {
-  const image = await readImageBuffer(args.reference_image || args.input_image);
-  const form = new FormData();
-  form.append('model', imageModelFor('openai', args));
-  form.append('prompt', promptWithAspect(args));
-  form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
-  if (args.output_path) form.append('response_format', 'b64_json');
-  if (args.size || args.width || args.height) form.append('size', `${dimensions(args).width}x${dimensions(args).height}`);
-  if (providerQuality('openai', args)) form.append('quality', providerQuality('openai', args));
-
-  const response = await axios.post('https://api.openai.com/v1/images/edits', form, {
-    headers: { Authorization: `Bearer ${requireProviderKey('openai')}`, ...form.getHeaders() }
-  });
-
-  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
-  if (!b64) throw Object.assign(new Error('OpenAI edit response did not include image data'), { retryable: false, response: response?.data });
-  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
-  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
-}
-
-async function openrouterImageEdits(args) {
-  const image = await readImageBuffer(args.reference_image || args.input_image);
-  const form = new FormData();
-  form.append('model', imageModelFor('openrouter', args));
-  form.append('prompt', promptWithAspect(args));
-  form.append('image', image, { filename: 'input.png', contentType: 'image/png' });
-  if (args.size || args.width || args.height) form.append('size', `${dimensions(args).width}x${dimensions(args).height}`);
-  if (providerQuality('openrouter', args)) form.append('quality', providerQuality('openrouter', args));
-
-  const response = await axios.post('https://openrouter.ai/api/v1/images/edits', form, {
-    headers: {
-      Authorization: `Bearer ${requireProviderKey('openrouter')}`,
-      'HTTP-Referer': 'https://github.com/jgkme/img-gen-mcp',
-      'X-Title': 'img-gen-mcp',
-      ...form.getHeaders()
-    }
-  });
-
-  const b64 = response?.data?.data?.[0]?.b64_json || response?.data?.data?.[0]?.url?.split(',').pop();
-  if (!b64) throw Object.assign(new Error('OpenRouter edit response did not include image data'), { retryable: false, response: response?.data });
-  const output_path = args.output_path ? await writeImage(args.output_path, b64) : undefined;
-  return { type: 'image', data: b64, mimeType: 'image/png', output_path };
-}
-
-async function openrouterImagesGenerations(args) {
-  const prompt = promptWithAspect(args);
-  const image = await readImageInput(args.input_image);
-  const imageConfig = {
-    ...(args.aspect ? { aspect_ratio: args.aspect === 'square' ? '1:1' : args.aspect === 'landscape' ? '16:9' : '9:16' } : {}),
-    ...(args.size && args.size.includes('x') ? { size: args.size } : {}),
-    ...(providerQuality('openrouter', args) ? { quality: providerQuality('openrouter', args) } : {}),
-    ...(args.background ? { background: args.background } : {}),
-    ...(args.output_format ? { output_format: args.output_format } : {}),
-    ...(args.moderation ? { moderation: args.moderation } : {})
-  };
-
-  const response = await axios.post(
-    'https://openrouter.ai/api/v1/chat/completions',
-    {
-      model: imageModelFor('openrouter', args),
-      messages: [
-        {
-          role: 'user',
-          content: image
-            ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }]
-            : [{ type: 'text', text: prompt }]
-        }
-      ],
-      modalities: modalitiesForModel('openrouter', imageModelFor('openrouter', args), args.modalities),
-      ...(Object.keys(imageConfig).length ? { image_config: imageConfig } : {}),
-      ...(args.input_images?.length ? { input_images: args.input_images } : {}),
-      ...(image ? {} : { input_images: [] }),
-      ...(args.max_tokens ? { max_tokens: args.max_tokens } : {})
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${requireProviderKey('openrouter')}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://github.com/jgkme/img-gen-mcp',
-        'X-Title': 'img-gen-mcp'
-      }
-    }
-  );
-
-  const payloads = extractImagePayloads(response?.data);
-  if (!payloads.length) {
-    throw Object.assign(new Error('openrouter chat response did not include an image payload'), { retryable: false, response: response?.data });
-  }
-
-  const images = [];
-  for (let index = 0; index < payloads.length; index += 1) {
-    const payload = payloads[index];
-    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
-    if (args.output_path) {
-      images.push(await writeImageResult(image, index === 0 ? args.output_path : `${args.output_path.replace(/\.png$/i, '')}-${index + 1}.png`));
-    } else {
-      images.push(await writeImageResult(image, defaultSavedImagePath(`openrouter-${index + 1}`)));
-    }
-  }
-
-  return images.length === 1 ? images[0] : { type: 'images', images };
-}
-
-async function openaiImageGenerations(args) {
-  const image = await readImageInput(args.input_image);
-  const prompt = promptWithAspect(args);
-  const response = await axios.post(
-    'https://api.openai.com/v1/images/generations',
-    {
-      model: imageModelFor('openai', args),
-      prompt,
-      size: args.size || '1024x1024',
-      ...(providerQuality('openai', args) ? { quality: providerQuality('openai', args) } : {}),
-      ...(args.output_format ? { response_format: 'b64_json' } : {}),
-      ...(image ? { input_image: image } : {})
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${requireProviderKey('openai')}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-
-  const payloads = extractImagePayloads(response?.data);
-  if (!payloads.length) throw Object.assign(new Error('OpenAI image response did not include an image payload'), { retryable: false, response: response?.data });
-
-  const images = [];
-  for (let index = 0; index < payloads.length; index += 1) {
-    const payload = payloads[index];
-    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
-    if (args.output_path) {
-      images.push(await writeImageResult(image, index === 0 ? args.output_path : uniqueOutputPath(args.output_path, `-${index + 1}`)));
-    } else {
-      images.push(await writeImageResult(image, defaultSavedImagePath(`openai-${index + 1}`)));
-    }
-  }
-
-  return images.length === 1 ? images[0] : { type: 'images', images };
-}
-
-async function geminiImageGenerations(args) {
-  const image = await readImageInput(args.input_image);
-  const prompt = promptWithAspect(args);
-  const response = await axios.post(
-    'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-    {
-      model: imageModelFor('gemini', args),
-      messages: [
-        {
-          role: 'user',
-          content: image
-            ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }]
-            : [{ type: 'text', text: prompt }]
-        }
-      ],
-      modalities: modalitiesForModel('gemini', imageModelFor('gemini', args), args.modalities),
-      ...(args.max_tokens ? { max_tokens: args.max_tokens } : {})
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${requireProviderKey('gemini')}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
-
-  const payloads = extractImagePayloads(response?.data);
-  if (!payloads.length) throw Object.assign(new Error('Gemini image response did not include an image payload'), { retryable: false, response: response?.data });
-
-  const images = [];
-  for (let index = 0; index < payloads.length; index += 1) {
-    const payload = payloads[index];
-    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
-    if (args.output_path) {
-      images.push(await writeImageResult(image, index === 0 ? args.output_path : uniqueOutputPath(args.output_path, `-${index + 1}`)));
-    } else {
-      images.push(await writeImageResult(image, defaultSavedImagePath(`gemini-${index + 1}`)));
-    }
-  }
-
-  return images.length === 1 ? images[0] : { type: 'images', images };
-}
-
-async function providerChatCompletion(provider, args) {
-  const prompt = promptWithAspect(args);
-  const image = await readImageInput(args.input_image);
-  const messages = [
-    {
-      role: 'user',
-      content: image
-        ? [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url: image } }]
-        : [{ type: 'text', text: prompt }]
-    }
-  ];
-
-  const baseURL =
-    provider === 'openrouter'
-      ? 'https://openrouter.ai/api/v1'
-      : provider === 'openai'
-        ? 'https://api.openai.com/v1'
-        : ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)
-          ? (localEndpointBaseUrl() || 'http://127.0.0.1:8000/v1').replace(/\/$/, '')
-        : 'https://generativelanguage.googleapis.com/v1beta/openai';
-  const isLocalProvider = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider);
-  const apiKey = isLocalProvider ? configuredKey('IMAGE_MCP_LOCAL_API_KEY') : requireProviderKey(provider);
-
-  const response = await axios.post(
-    `${baseURL}/chat/completions`,
-    {
-      model: imageModelFor(provider, args),
-      messages,
-      modalities: ['image', 'text']
-    },
-    {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
-        ...(provider === 'openrouter' ? { 'HTTP-Referer': 'https://github.com/jgkme/img-gen-mcp', 'X-Title': 'img-gen-mcp' } : {})
-      },
-      ...(isLocalProvider ? { timeout: localTimeoutMs() } : {})
-    }
-  );
-
-  const payloads = extractImagePayloads(response?.data);
-  if (!payloads.length) throw Object.assign(new Error(`${provider} chat response did not include an image payload`), { retryable: false, response: response?.data });
-  const images = [];
-  for (let index = 0; index < payloads.length; index += 1) {
-    const payload = payloads[index];
-    const image = { type: 'image', data: payload.data, mimeType: payload.mimeType };
-    if (args.output_path) {
-      images.push(await writeImageResult(image, index === 0 ? args.output_path : `${args.output_path.replace(/\.png$/i, '')}-${index + 1}.png`));
-    } else {
-      images.push(await writeImageResult(image, defaultSavedImagePath(`chat-${index + 1}`)));
-    }
-  }
-  return images.length === 1 ? images[0] : { type: 'images', images };
-}
-
-async function providerEditImage(provider, args) {
-  return providerChatCompletion(provider, {
-    ...args,
-    input_image: args.reference_image || args.input_image,
-    prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`
-  });
-}
-
-async function loadSharpInput(input) {
-  const buffer = await readImageBuffer(input);
-  const image = sharp(buffer, { failOn: 'none' }).rotate();
-  const metadata = await image.metadata();
-  return { image, metadata };
-}
-
-async function alphaQualityStats(buffer) {
-  const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  let semi = 0;
-  let opaque = 0;
-  let transparent = 0;
-  let minA = 255;
-  let maxA = 0;
-  let transparentRgbResidue = 0;
-
-  for (let i = 0; i < data.length; i += info.channels) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    const a = data[i + info.channels - 1];
-
-    if (a === 0) {
-      transparent += 1;
-      if (r !== 0 || g !== 0 || b !== 0) transparentRgbResidue += 1;
-    } else if (a === 255) {
-      opaque += 1;
-    } else {
-      semi += 1;
-    }
-
-    if (a < minA) minA = a;
-    if (a > maxA) maxA = a;
-  }
-
   return {
-    width: info.width,
-    height: info.height,
-    minA,
-    maxA,
-    semi,
-    opaque,
-    transparent,
-    transparentRgbResidue,
-    hasAlpha: transparent > 0 || semi > 0
-  };
-}
-
-async function buildTransparencyInspectionSheet(buffer) {
-  const MAX_TILE = 640;
-  const backgrounds = ['#ffffff', '#111111', '#808080', '#ff00ff'];
-  const preview = sharp(buffer, { failOn: 'none' }).rotate().resize({ width: MAX_TILE, height: MAX_TILE, fit: 'inside', withoutEnlargement: true });
-  const previewBuffer = await preview.png().toBuffer();
-  const previewMeta = await sharp(previewBuffer).metadata();
-  const previewWidth = previewMeta.width || MAX_TILE;
-  const previewHeight = previewMeta.height || MAX_TILE;
-  const offsetLeft = Math.max(0, Math.floor((MAX_TILE - previewWidth) / 2));
-  const offsetTop = Math.max(0, Math.floor((MAX_TILE - previewHeight) / 2));
-
-  const tiles = await Promise.all(
-    backgrounds.map(async (background) =>
-      sharp({ create: { width: MAX_TILE, height: MAX_TILE, channels: 4, background } })
-        .composite([{ input: previewBuffer, left: offsetLeft, top: offsetTop }])
-        .png()
-        .toBuffer()
-    )
-  );
-
-  return sharp({ create: { width: MAX_TILE * 2, height: MAX_TILE * 2, channels: 4, background: '#1b1b1b' } })
-    .composite([
-      { input: tiles[0], left: 0, top: 0 },
-      { input: tiles[1], left: MAX_TILE, top: 0 },
-      { input: tiles[2], left: 0, top: MAX_TILE },
-      { input: tiles[3], left: MAX_TILE, top: MAX_TILE }
-    ])
-    .png()
-    .toBuffer();
-}
-
-async function saveTransparencyInspectionSheet(buffer, outputPath, fallbackPrefix) {
-  const baseDir = await ensureOutputDir();
-  const target = outputPath ? inspectionOutputPath(outputPath) : path.join(baseDir, outputFileName(`${fallbackPrefix}-inspect`));
-  await ensureDir(path.dirname(target));
-  const sheet = await buildTransparencyInspectionSheet(buffer);
-  await fs.writeFile(target, sheet);
-  return target;
-}
-
-async function saveSharpResult(image, outputPath, fallbackPrefix) {
-  const baseDir = await ensureOutputDir();
-  const target = outputPath ? normalizeOutputPath(outputPath, fallbackPrefix) : path.join(baseDir, outputFileName(fallbackPrefix));
-  await ensureDir(path.dirname(target));
-  const buffer = await image.png().toBuffer();
-  await fs.writeFile(target, buffer);
-  return target;
-}
-
-function optimizeOutputPath(outputPath, fallbackPrefix, format) {
-  if (outputPath && typeof outputPath === 'string' && outputPath.trim()) {
-    const resolved = normalizeOutputPath(outputPath, fallbackPrefix);
-    if (path.extname(resolved)) return resolved;
-    return `${resolved}.${format}`;
-  }
-  const baseDir = outputDir();
-  return path.join(baseDir, outputFileName(fallbackPrefix).replace(/\.png$/i, `.${format}`));
-}
-
-async function optimizeImage(args) {
-  const { buffer, output_path, mimeType, bytes, format, hasAlpha } = await optimizeImageBuffer(await readImageBuffer(args.input_image), args);
-  return {
-    type: 'image',
-    data: buffer.toString('base64'),
-    mimeType,
-    output_path,
-    bytes,
-    action: 'optimize_image',
-    model: hasAlpha ? 'png' : format
-  };
-}
-
-async function optimizeImageBuffer(inputBuffer, args = {}) {
-  const image = sharp(inputBuffer, { failOn: 'none' }).rotate();
-  const metadata = await image.metadata();
-  const hasAlpha = Boolean(metadata.hasAlpha);
-  const requestedFormat = String(args.output_format || '').toLowerCase();
-  const pathExt = args.output_path ? path.extname(args.output_path).replace('.', '').toLowerCase() : '';
-  const format = requestedFormat || pathExt || (hasAlpha ? 'png' : 'webp');
-  const qualityValue = Number(args.quality);
-  const compressionValue = Number(args.compression_level);
-  const quality = Number.isFinite(qualityValue) ? Math.max(1, Math.min(100, qualityValue)) : 85;
-  const compressionLevel = Number.isFinite(compressionValue) ? Math.max(0, Math.min(9, compressionValue)) : 9;
-  const lossless = args.lossless === undefined ? format === 'png' : Boolean(args.lossless);
-  const target = optimizeOutputPath(args.output_path, 'optimize', format);
-
-  let pipeline = image.clone();
-  if (format === 'webp') {
-    pipeline = pipeline.webp({ quality, lossless, effort: 6 });
-  } else if (format === 'jpeg' || format === 'jpg') {
-    pipeline = pipeline.flatten({ background: args.background || '#ffffff' }).jpeg({ quality, mozjpeg: true });
-  } else if (format === 'avif') {
-    pipeline = pipeline.avif({ quality, effort: 6 });
-  } else {
-    pipeline = pipeline.png({ compressionLevel, adaptiveFiltering: true, palette: Boolean(args.palette) });
-  }
-
-  const buffer = await pipeline.toBuffer();
-  await ensureDir(path.dirname(target));
-  await fs.writeFile(target, buffer);
-  return {
-    buffer,
-    output_path: target,
-    mimeType: `image/${format === 'jpg' ? 'jpeg' : format}`,
-    bytes: buffer.length,
-    format,
-    hasAlpha
-  };
-}
-
-function validateOptimizeArgs(args) {
-  if (!args.input_image || typeof args.input_image !== 'string') {
-    throw Object.assign(new Error('input_image is required'), { code: 'validation_error', retryable: false });
-  }
-  if (args.output_path && typeof args.output_path !== 'string') {
-    throw Object.assign(new Error('output_path must be a string'), { code: 'validation_error', retryable: false });
-  }
-  if (args.output_format && !OPTIMIZE_FORMATS.includes(String(args.output_format).toLowerCase())) {
-    throw Object.assign(new Error(`output_format must be one of ${OPTIMIZE_FORMATS.join(', ')}`), { code: 'validation_error', retryable: false });
-  }
-  if (args.quality !== undefined && (!Number.isFinite(Number(args.quality)) || Number(args.quality) < 1 || Number(args.quality) > 100)) {
-    throw Object.assign(new Error('quality must be a number between 1 and 100'), { code: 'validation_error', retryable: false });
-  }
-  if (args.compression_level !== undefined && (!Number.isFinite(Number(args.compression_level)) || Number(args.compression_level) < 0 || Number(args.compression_level) > 9)) {
-    throw Object.assign(new Error('compression_level must be a number between 0 and 9'), { code: 'validation_error', retryable: false });
-  }
-}
-
-async function saveBufferResult(buffer, outputPath, fallbackPrefix) {
-  const baseDir = await ensureOutputDir();
-  const target = outputPath ? normalizeOutputPath(outputPath, fallbackPrefix) : path.join(baseDir, outputFileName(fallbackPrefix));
-  await ensureDir(path.dirname(target));
-  await fs.writeFile(target, buffer);
-  return target;
-}
-
-async function defringeAlphaBuffer(buffer, args = {}) {
-  const radius = Math.max(1, Math.min(6, Number(args.defringe_radius || 3)));
-  const opaqueCutoff = Math.max(1, Math.min(254, Number(args.defringe_opaque_cutoff || 240)));
-  const edgeAlphaMax = Math.max(1, Math.min(254, Number(args.defringe_edge_alpha_max || 245)));
-  const fringeLumaMin = Math.max(0, Math.min(255, Number(args.defringe_fringe_luma_min || 0)));
-  const alphaContract = Math.max(0, Math.min(0.25, Number(args.defringe_alpha_contract || 0.04)));
-  const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const width = info.width;
-  const height = info.height;
-  const out = Buffer.from(data);
-  const channels = info.channels;
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const idx = (y * width + x) * channels;
-      const alpha = data[idx + 3];
-      if (alpha <= 0) {
-        out[idx] = 0;
-        out[idx + 1] = 0;
-        out[idx + 2] = 0;
-        continue;
-      }
-      if (alpha >= 255) continue;
-      if (alpha > edgeAlphaMax) continue;
-
-      const luma = Math.round(0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]);
-      if (luma < fringeLumaMin) continue;
-
-      let touchesEdgeBand = false;
-      for (let oy = -2; oy <= 2 && !touchesEdgeBand; oy += 1) {
-        const ny = y + oy;
-        if (ny < 0 || ny >= height) continue;
-        for (let ox = -2; ox <= 2; ox += 1) {
-          const nx = x + ox;
-          if (nx < 0 || nx >= width || (ox === 0 && oy === 0)) continue;
-          const nidx = (ny * width + nx) * channels;
-          if (data[nidx + 3] < 255) {
-            touchesEdgeBand = true;
-            break;
-          }
-        }
-      }
-
-      if (!touchesEdgeBand) continue;
-
-      let bestDistance = Number.POSITIVE_INFINITY;
-      let bestLuma = Number.POSITIVE_INFINITY;
-      let bestAlpha = -1;
-      let bestR = data[idx];
-      let bestG = data[idx + 1];
-      let bestB = data[idx + 2];
-
-      for (let oy = -radius; oy <= radius; oy += 1) {
-        const ny = y + oy;
-        if (ny < 0 || ny >= height) continue;
-        for (let ox = -radius; ox <= radius; ox += 1) {
-          const nx = x + ox;
-          if (nx < 0 || nx >= width || (ox === 0 && oy === 0)) continue;
-          const nidx = (ny * width + nx) * channels;
-          const na = data[nidx + 3];
-          if (na < opaqueCutoff) continue;
-          const nluma = Math.round(0.2126 * data[nidx] + 0.7152 * data[nidx + 1] + 0.0722 * data[nidx + 2]);
-          const distance = ox * ox + oy * oy;
-          if (nluma < bestLuma || (nluma === bestLuma && (na > bestAlpha || (na === bestAlpha && distance < bestDistance)))) {
-            bestLuma = nluma;
-            bestAlpha = na;
-            bestDistance = distance;
-            bestR = data[nidx];
-            bestG = data[nidx + 1];
-            bestB = data[nidx + 2];
-          }
-        }
-      }
-
-      if (Number.isFinite(bestDistance)) {
-        out[idx] = bestR;
-        out[idx + 1] = bestG;
-        out[idx + 2] = bestB;
-        if (alpha <= 160) {
-          out[idx + 3] = Math.max(0, Math.round(alpha * (1 - alphaContract)));
-        }
-      }
-    }
-  }
-
-  return sharp(out, { raw: { width, height, channels } }).png().toBuffer();
-}
-
-async function refineAlphaBuffer(buffer, args = {}) {
-  const backend = String(args.backend || args.background_backend || '').toLowerCase();
-  const feather = Number(args.alpha_feather || 0);
-  const threshold = args.alpha_threshold === undefined ? undefined : Number(args.alpha_threshold);
-  if ((!Number.isFinite(feather) || feather <= 0) && threshold === undefined) return buffer;
-
-  const { data, info } = await sharp(buffer, { failOn: 'none' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const width = info.width;
-  const height = info.height;
-  const alpha = Buffer.alloc(width * height);
-
-  for (let i = 0, p = 0; p < alpha.length; i += info.channels, p += 1) {
-    alpha[p] = data[i + info.channels - 1];
-  }
-
-  let alphaPipeline = sharp(alpha, { raw: { width, height, channels: 1 } });
-  if (Number.isFinite(feather) && feather > 0) alphaPipeline = alphaPipeline.blur(feather);
-  if (threshold !== undefined) alphaPipeline = alphaPipeline.threshold(Math.max(0, Math.min(255, threshold)));
-
-  const refinedAlpha = await alphaPipeline.toBuffer();
-  for (let i = 0, p = 0; p < refinedAlpha.length; i += info.channels, p += 1) {
-    data[i + info.channels - 1] = refinedAlpha[p];
-  }
-
-  return sharp(data, { raw: { width, height, channels: info.channels } }).png().toBuffer();
-}
-
-async function removeBackgroundBuffer(args) {
-  const backend = backgroundRemoveBackend(args.backend);
-  const modelName = String(args.model || (backend === 'imgly' ? 'medium' : backend === 'withoutbg' ? 'docker-daemon' : 'modnet')).toLowerCase();
-  const input =
-    backend === 'imgly' || backend === 'withoutbg'
-      ? /^https?:\/\//.test(args.input_image) || args.input_image.startsWith('data:')
-        ? args.input_image
-        : path.resolve(args.input_image)
-      : await readImageBuffer(args.input_image);
-
-  if (backend === 'imgly') {
-    const blob = await removeBackground(input, {
-      model: modelName === 'small' ? 'small' : 'medium',
-      debug: debugMode(),
-      output: {
-        format: 'image/png',
-        type: 'foreground',
-        quality: 0.8
-      }
-    });
-    const buffer = Buffer.from(await blob.arrayBuffer());
-    return { buffer, backend, model: modelName === 'small' ? 'small' : 'medium' };
-  }
-
-  if (backend === 'withoutbg') {
-    if (!(await ensureWithoutBgDaemonRunning())) {
-      throw Object.assign(new Error('withoutBG local daemon is not running. Start it with `docker compose -f withoutbg-daemon/docker-compose.yml up -d` or set WITHOUTBG_AUTOSTART=1 to let the MCP start it for you.'), {
-        code: 'missing_daemon',
-        retryable: false,
-        details: { daemonUrl: withoutBgDaemonUrl(), autostart: withoutBgAutostartEnabled() }
-      });
-    }
-
-    const imageBuffer = await readImageBuffer(args.input_image);
-    const form = new FormData();
-    const inputName =
-      typeof args.input_image === 'string' && !/^https?:\/\//.test(args.input_image) && !args.input_image.startsWith('data:')
-        ? path.basename(args.input_image)
-        : 'input.png';
-    form.append('file', imageBuffer, {
-      filename: inputName || 'input.png',
-      contentType: 'image/png'
-    });
-
-    let response;
-    try {
-      response = await axios.post(`${withoutBgDaemonUrl().replace(/\/$/, '')}/remove-background`, form, {
-        headers: {
-          ...form.getHeaders()
-        },
-        responseType: 'arraybuffer',
-        timeout: 120000,
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity
-      });
-    } catch (error) {
-      throw Object.assign(new Error(`withoutBG local daemon request failed: ${error?.response?.status || error?.code || error?.message || 'unknown error'}`), {
-        code: 'daemon_request_failed',
-        retryable: true,
-        details: { daemonUrl: withoutBgDaemonUrl(), response: error?.response?.data || undefined }
-      });
-    }
-
-    const buffer = Buffer.from(response.data);
-    return { buffer, backend, model: 'docker-daemon' };
-  }
-
-  const model = modelName === 'briaai' ? createBriaaiModel() : modelName === 'u2netp' ? createU2netpModel() : createModnetModel();
-  const buffer = await rmbg(input, {
-    model,
-    maxResolution: Math.max(1, Number(args.max_resolution) || 2048),
-    cacheDir: path.join(process.cwd(), '.cache', 'rmbg'),
-    enableCache: true
-  });
-  return { buffer, backend, model: modelName === 'briaai' ? 'briaai' : modelName === 'u2netp' ? 'u2netp' : 'modnet' };
-}
-
-async function resizeImage(args) {
-  const { image } = await loadSharpInput(args.input_image);
-  const { width, height } = dimensions(args);
-  let pipeline = image.resize({
-    width,
-    height,
-    fit: args.fit || 'inside',
-    withoutEnlargement: true
-  });
-  if (args.background) pipeline = pipeline.flatten({ background: args.background });
-  const output_path = await saveSharpResult(pipeline, args.output_path, 'resize');
-  return { type: 'image', data: (await fs.readFile(output_path)).toString('base64'), mimeType: 'image/png', output_path };
-}
-
-async function autoCropImage(args) {
-  const { image, metadata } = await loadSharpInput(args.input_image);
-  const width = args.width || metadata.width;
-  const height = args.height || metadata.height;
-  let pipeline = image;
-  if (width && height) {
-    pipeline = pipeline.resize(width, height, { fit: 'cover', position: args.gravity || 'centre' });
-  } else {
-    pipeline = pipeline.trim();
-  }
-  const output_path = await saveSharpResult(pipeline, args.output_path, 'crop');
-  return { type: 'image', data: (await fs.readFile(output_path)).toString('base64'), mimeType: 'image/png', output_path };
-}
-
-async function backgroundRemoveImage(args) {
-  const { buffer: outputBuffer, backend, model } = await removeBackgroundBuffer(args);
-  const defringedBuffer = await defringeAlphaBuffer(outputBuffer, args);
-  const refinedBuffer = await refineAlphaBuffer(defringedBuffer, { ...args, backend });
-  const optimized = await optimizeImageBuffer(refinedBuffer, args);
-  const output_path = optimized.output_path;
-  const alpha = await alphaQualityStats(optimized.buffer);
-  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(optimized.buffer, output_path || args.output_path, 'background-remove') : undefined;
-  return {
-    type: 'image',
-    data: optimized.buffer.toString('base64'),
-    mimeType: optimized.mimeType,
-    output_path,
-    bytes: optimized.bytes,
-    backend,
-    model,
-    alpha,
-    inspection_path,
-    action: 'background_remove'
-  };
-}
-
-async function finalizeImage(args) {
-  let inputBuffer = await readImageBuffer(args.input_image);
-  let backgroundInfo;
-
-  if (args.remove_background) {
-    backgroundInfo = await removeBackgroundBuffer({
-      input_image: args.input_image,
-      backend: args.background_backend,
-      model: args.background_model,
-      max_resolution: args.max_resolution
-    });
-    inputBuffer = backgroundInfo.buffer;
-  }
-
-  const image = sharp(inputBuffer, { failOn: 'none' }).rotate();
-  const metadata = await image.metadata();
-  let pipeline = image;
-
-  if (Number.isFinite(args.width) && Number.isFinite(args.height)) {
-    pipeline = pipeline.resize({
-      width: args.width,
-      height: args.height,
-      fit: args.fit || 'cover',
-      position: args.gravity || 'centre',
-      withoutEnlargement: false
-    });
-  } else if (args.trim) {
-    pipeline = pipeline.trim();
-  }
-
-  if (args.background) {
-    pipeline = pipeline.flatten({ background: args.background });
-  }
-
-  const rawOutput = await pipeline.toBuffer();
-  const defringedBuffer = await defringeAlphaBuffer(rawOutput, args);
-  const refinedBuffer = await refineAlphaBuffer(defringedBuffer, { ...args, backend: backgroundInfo?.backend, background_backend: backgroundInfo?.backend });
-  const optimized = await optimizeImageBuffer(refinedBuffer, args);
-  const output_path = optimized.output_path;
-  const outputMetadata = await sharp(optimized.buffer, { failOn: 'none' }).metadata();
-  const alpha = await alphaQualityStats(optimized.buffer);
-  const inspection_path = alpha.hasAlpha ? await saveTransparencyInspectionSheet(optimized.buffer, output_path || args.output_path, 'finalize') : undefined;
-  return {
-    type: 'image',
-    data: optimized.buffer.toString('base64'),
-    mimeType: optimized.mimeType,
-    output_path,
-    bytes: optimized.bytes,
-    width: outputMetadata.width || metadata.width,
-    height: outputMetadata.height || metadata.height,
-    backend: backgroundInfo?.backend,
-    model: backgroundInfo?.model,
-    alpha,
-    inspection_path,
-    action: 'finalize_image'
-  };
-}
-
-async function generateImage(args) {
-  const provider = providerFrom(args.provider);
-  if (provider === 'kilo') return kiloImagesGenerations(args);
-  if (provider === 'openrouter') return openrouterImagesGenerations(args);
-  if (provider === 'openai') return openaiImageGenerations(args);
-  if (provider === 'gemini') return geminiImageGenerations(args);
-  if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return providerChatCompletion(provider, args);
-  return providerChatCompletion(provider, args);
-}
-
-async function listImageModels() {
-  return {
-    defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
-    providers: {
-      kilo: { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations', generate: true, edit: true },
-      openrouter: { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions', generate: true, edit: true },
-      openai: { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions', generate: true, edit: true },
-      gemini: { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false },
-      'openai-compatible': localProviderStatus('openai-compatible'),
-      comfyui: localProviderStatus('comfyui'),
-      drawthings: localProviderStatus('drawthings'),
-      mlx: localProviderStatus('mlx')
-    },
-    models: KNOWN_MODELS,
-    outputDir: outputDir(),
-    openrouter: {
-      imageGeneration: {
-        modalities: ['image', 'text', 'image-only'],
-        imageConfig: ['aspect_ratio', 'size', 'quality', 'background', 'output_format', 'moderation']
-      }
-    }
-  };
-}
-
-async function editImage(args) {
-  const provider = providerFrom(args.provider);
-  if (provider === 'kilo' && EDIT_CAPABILITIES.kilo) return kiloImageEdits(args);
-  if (provider === 'openai' && EDIT_CAPABILITIES.openai) return openaiImageEdits(args);
-  if (provider === 'openrouter' && EDIT_CAPABILITIES.openrouter) return openrouterImageEdits(args);
-  return providerChatCompletion(provider, {
-    ...args,
-    input_image: args.reference_image || args.input_image,
-    prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`
-  });
-}
-
-async function getProviderStatus() {
-  return {
+    name: 'img-gen-mcp',
     version: VERSION,
-    defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE },
-    configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])),
-    capabilities: {
-      openrouter: {
-        chat_image_generation: true,
-        output_modalities: ['image', 'text'],
-        response_shapes: ['choices[0].message.images', 'choices[0].message.content', 'data.output', 'data']
-      }
-    },
-    runtime: {
-      defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined,
-      defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined,
-      outputDir: outputDir(),
-      local: {
-        provider: localProviderFrom() || undefined,
-        endpoint: localEndpointBaseUrl() || undefined,
-        model: localModelName() || undefined,
-        timeoutMs: localTimeoutMs(),
-        autostart: localAutostartEnabled(),
-        bootstrap: localBootstrapEnabled()
+    async listTools() { return tools; },
+    async callTool(request) {
+      const { name, arguments: args = {} } = request.params;
+      try {
+        if (name === 'kilo_generate_image' || name === 'edit_image') validateArgs(args);
+        if (name === 'generate_image' || name === 'submit_task' || name === 'batch_generate_image') validateArgs(args);
+        if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
+        if (name === 'optimize_image') validateOptimizeArgs(args);
+        if (name === 'finalize_image') validateProcessingArgs({ ...args, backend: args.background_backend, model: args.background_model });
+        if (name === 'kilo_generate_image') return { content: imageToolContent(await generateImage(args)) };
+        if (name === 'generate_image') return { content: imageToolContent(await generateImage(args)) };
+        if (name === 'edit_image') return { content: imageToolContent(await editImage(args)) };
+        if (name === 'background_remove') return { content: imageToolContent(await backgroundRemoveImage(args)) };
+        if (name === 'finalize_image') return { content: imageToolContent(await finalizeImage(args)) };
+        if (name === 'resize_image') return { content: imageToolContent(await resizeImage(args)) };
+        if (name === 'auto_crop') return { content: imageToolContent(await autoCropImage(args)) };
+        if (name === 'optimize_image') return { content: imageToolContent(await optimizeImage(args)) };
+        if (name === 'submit_task') return { content: [{ type: 'text', text: JSON.stringify(await submitTask(args), null, 2) }] };
+        if (name === 'get_task') { const task = getTask(args.task_id); if (!task) throw Object.assign(new Error(`Unknown task: ${args.task_id}`), { retryable: false }); return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] }; }
+        if (name === 'batch_generate_image') return { content: [{ type: 'text', text: JSON.stringify(await batchGenerateImage(args), null, 2) }] };
+        if (name === 'list_image_models') return { content: [{ type: 'text', text: JSON.stringify(await listImageModels(), null, 2) }] };
+        if (name === 'get_provider_status') return { content: [{ type: 'text', text: JSON.stringify(await getProviderStatus(), null, 2) }] };
+        if (name === 'get_model_capabilities') return { content: [{ type: 'text', text: JSON.stringify({
+          providers: Object.fromEntries(PROVIDERS.map((provider) => [provider, {
+            provider,
+            family: providerModelFamily(provider),
+            generate: true,
+            edit: Boolean(EDIT_CAPABILITIES[provider]),
+            batch: true,
+            async: true,
+            localEndpoint: ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider),
+            warnings: providerWarnings(provider)
+          }])),
+          local: { provider: localProviderFrom() || undefined, endpoint: localEndpointBaseUrl() || undefined, model: localModelName() || undefined, bootstrap: localBootstrapEnabled() }
+        }, null, 2) }] };
+        throw Object.assign(new Error(`Unknown tool: ${name}`), { retryable: false });
+      } catch (error) {
+        return { content: [{ type: 'text', text: String(error?.message || error) }], isError: true };
       }
     }
   };
 }
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: [
-    {
-      name: 'kilo_generate_image',
-      description:
-        'Generate an image using the configured provider. Choose a provider by intent: default/general to black-forest-labs/flux.2-pro, fast drafts to black-forest-labs/flux.2-flex, OpenAI uses gpt-image-1, Gemini defaults to gemini-2.5-flash-image and also supports gemini-3.1-flash-image-preview and gemini-3-pro-image-preview. Provide subject, style, colors, mood, context, aspect ratio, transparency, and optional reference image.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          prompt: { type: 'string' },
-          provider: { type: 'string', enum: PROVIDERS },
-          model: { type: 'string' },
-          quality: { type: 'string' },
-          purpose: { type: 'string' },
-          style: { type: 'string' },
-          size: { type: 'string' },
-          width: { type: 'number' },
-          height: { type: 'number' },
-          aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] },
-          steps: { type: 'number' },
-          input_image: { type: 'string' },
-          output_path: { type: 'string' }
-        },
-        required: ['prompt']
-      }
-    },
-    {
-      name: 'generate_image',
-      description: 'Generate images using the selected provider. OpenRouter requests default to chat-completions with modalities and response normalization, including multiple image payloads when present.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          prompt: { type: 'string' },
-          provider: { type: 'string', enum: PROVIDERS },
-          model: { type: 'string' },
-          purpose: { type: 'string' },
-          style: { type: 'string' },
-          size: { type: 'string' },
-          width: { type: 'number' },
-          height: { type: 'number' },
-          aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] },
-          steps: { type: 'number' },
-          input_image: { type: 'string' },
-          input_images: { type: 'array', items: { type: 'string' } },
-          modalities: { type: 'array', items: { type: 'string' } },
-          quality: { type: 'string' },
-          background: { type: 'string' },
-          output_format: { type: 'string' },
-          moderation: { type: 'string' },
-          max_tokens: { type: 'number' },
-          output_path: { type: 'string' }
-        },
-        required: ['prompt']
-      }
-    },
-    {
-      name: 'list_image_models',
-      description: 'List available providers, defaults, model families, and edit capability.',
-      inputSchema: { type: 'object', properties: {} }
-    },
-    {
-      name: 'get_provider_status',
-      description: 'Report configured providers, defaults, and server version.',
-      inputSchema: { type: 'object', properties: {} }
-    },
-    {
-      name: 'edit_image',
-      description: 'Edit an image using a reference image and prompt.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          prompt: { type: 'string' },
-          provider: { type: 'string', enum: PROVIDERS },
-          model: { type: 'string' },
-          quality: { type: 'string' },
-          size: { type: 'string' },
-          width: { type: 'number' },
-          height: { type: 'number' },
-          aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] },
-          steps: { type: 'number' },
-          input_image: { type: 'string' },
-          reference_image: { type: 'string' },
-          output_path: { type: 'string' }
-        },
-        required: ['prompt', 'input_image']
-      }
-    },
-    {
-      name: 'background_remove',
-      description: 'Remove the background from an image with a local segmentation model or the shared withoutBG Docker daemon and preserve transparency in the PNG output.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          input_image: { type: 'string' },
-          backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS },
-          model: { type: 'string' },
-          max_resolution: { type: 'number' },
-          alpha_feather: { type: 'number' },
-          alpha_threshold: { type: 'number' },
-          output_path: { type: 'string' }
-        },
-        required: ['input_image']
-      }
-    },
-    {
-      name: 'finalize_image',
-      description: 'Finalize an image locally by optionally removing the background with local or daemon-backed matting and then cropping, trimming, resizing, and saving a PNG.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          input_image: { type: 'string' },
-          remove_background: { type: 'boolean' },
-          background_backend: { type: 'string', enum: BACKGROUND_REMOVE_BACKENDS },
-          background_model: { type: 'string' },
-          max_resolution: { type: 'number' },
-          alpha_feather: { type: 'number' },
-          alpha_threshold: { type: 'number' },
-          trim: { type: 'boolean' },
-          width: { type: 'number' },
-          height: { type: 'number' },
-          fit: { type: 'string', enum: PROCESSING_FITS },
-          gravity: { type: 'string' },
-          background: { type: 'string' },
-          output_path: { type: 'string' }
-        },
-        required: ['input_image']
-      }
-    },
-    {
-      name: 'resize_image',
-      description: 'Resize an image locally with aspect-ratio-preserving defaults and PNG output.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          input_image: { type: 'string' },
-          output_path: { type: 'string' },
-          width: { type: 'number' },
-          height: { type: 'number' },
-          fit: { type: 'string', enum: PROCESSING_FITS },
-          background: { type: 'string' }
-        },
-        required: ['input_image']
-      }
-    },
-    {
-      name: 'auto_crop',
-      description: 'Crop an image locally to a target aspect or requested dimensions.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          input_image: { type: 'string' },
-          output_path: { type: 'string' },
-          width: { type: 'number' },
-          height: { type: 'number' },
-          gravity: { type: 'string' }
-        },
-        required: ['input_image']
-      }
-    },
-    {
-      name: 'optimize_image',
-      description: 'Optimize an image for the web by re-encoding it as compressed PNG, WebP, JPEG, or AVIF with metadata stripped.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          input_image: { type: 'string' },
-          output_path: { type: 'string' },
-          output_format: { type: 'string', enum: OPTIMIZE_FORMATS },
-          quality: { type: 'number' },
-          compression_level: { type: 'number' },
-          lossless: { type: 'boolean' },
-          background: { type: 'string' },
-          palette: { type: 'boolean' }
-        },
-        required: ['input_image']
-      }
-    }
-  ]
-}));
+const context = createServerContext();
+const server = new Server({ name: context.name, version: context.version }, { capabilities: { tools: {} } });
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: await context.listTools() }));
+server.setRequestHandler(CallToolRequestSchema, async (request) => context.callTool(request));
 
-server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const { name, arguments: args = {} } = request.params;
-  try {
-    if (name === 'kilo_generate_image' || name === 'edit_image') validateArgs(args);
-    if (name === 'generate_image') validateArgs(args);
-    if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
-    if (name === 'optimize_image') validateOptimizeArgs(args);
-    if (name === 'finalize_image') validateProcessingArgs({ ...args, backend: args.background_backend, model: args.background_model });
-    if (name === 'kilo_generate_image') {
-      const result = await generateImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'generate_image') {
-      const result = await generateImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'edit_image') {
-      const result = await editImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'background_remove') {
-      const result = await backgroundRemoveImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'finalize_image') {
-      const result = await finalizeImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'resize_image') {
-      const result = await resizeImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'auto_crop') {
-      const result = await autoCropImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'optimize_image') {
-      const result = await optimizeImage(args);
-      return { content: imageToolContent(result) };
-    }
-    if (name === 'list_image_models') {
-      return { content: [{ type: 'text', text: JSON.stringify(await listImageModels(), null, 2) }] };
-    }
-    if (name === 'get_provider_status') {
-      return { content: [{ type: 'text', text: JSON.stringify(await getProviderStatus(), null, 2) }] };
-    }
-    throw Object.assign(new Error(`Unknown tool: ${name}`), { retryable: false });
-  } catch (error) {
-    return { content: [{ type: 'text', text: errorResult(error) }], isError: true };
-  }
-});
-
-try {
+async function main() {
+  const mode = String(env('IMAGE_MCP_TRANSPORT') || 'stdio').toLowerCase();
   await resolveOutputDirHint();
   validateStartup();
   process.stderr.write(`img-gen-mcp v${VERSION} starting\n`);
+  if (mode === 'http') {
+    const transport = new StreamableHTTPServerTransport();
+    await server.connect(transport);
+    const host = env('IMAGE_MCP_HTTP_HOST') || '127.0.0.1';
+    const port = Number(env('IMAGE_MCP_HTTP_PORT') || 3333);
+    const httpServer = http.createServer(async (req, res) => {
+      try { await transport.handleRequest(req, res); } catch (error) { res.statusCode = 500; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ error: String(error?.message || error) })); }
+    });
+    httpServer.listen(port, host, () => process.stderr.write(`img-gen-mcp http listening on http://${host}:${port}\n`));
+    return;
+  }
   await server.connect(new StdioServerTransport());
-} catch (error) {
-  process.stderr.write(`${errorResult(error)}\n`);
-  process.exit(1);
 }
+
+main().catch((error) => { process.stderr.write(`${String(error?.message || error)}\n`); process.exit(1); });

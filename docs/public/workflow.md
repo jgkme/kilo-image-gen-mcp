@@ -13,6 +13,11 @@ generate -> background_remove/finalize -> inspect -> optimize -> deliver
 - **Web-ready banner:** generate -> `finalize_image` -> `optimize_image`
 - **Local MLX experiment:** generate with `IMAGE_MCP_LOCAL_PROVIDER=mlx` -> refine prompt -> save local PNG
 - **Local open endpoint:** connect to a user-owned OpenAI-compatible server -> generate -> post-process locally
+- **Async generation:** `submit_task` -> poll `get_task` until `completed` -> use the returned `output_path`
+- **Prompt sweeps:** `batch_generate_image` -> compare the returned files for the strongest variant
+- **Reference image edit:** `edit_image` with `input_mode=image-to-image` and a local file or URL in `input_image`
+- **Remote reference:** pass an `http(s)` URL in `input_image` or `reference_image` when the backend accepts remote fetches
+- **Local upload:** pass a local file path in `input_image` or `reference_image` for one-shot generation or edits
 
 ## Inspection
 

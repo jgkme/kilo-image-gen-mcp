@@ -8,6 +8,8 @@ The server cannot directly borrow image models that live inside Cursor, Claude C
 
 Those apps must expose a separate local endpoint before `img-gen-mcp` can use them.
 
+If you want the server to infer a provider from the model slug, use `provider=auto` and pass a model such as `openai/gpt-image-1`, `google/gemini-2.5-flash-image`, or a local wrapper slug.
+
 | Client | Built-in app models | Works with `img-gen-mcp` |
 |---|---|---|
 | Cursor | No direct access | Yes, through a local endpoint or bridge |
@@ -16,6 +18,8 @@ Those apps must expose a separate local endpoint before `img-gen-mcp` can use th
 | MLX / local server | Yes, if exposed as HTTP | Yes, with `IMAGE_MCP_LOCAL_PROVIDER=mlx` |
 
 For local-only use, a bridge or endpoint is the right path: MLX-VLM on macOS, llama.cpp server mode, LM Studio, ComfyUI bridges, or Draw Things bridges.
+
+The tools `list_image_models` and `get_provider_status` now expose warnings and capability hints so clients can display whether a provider is cloud-backed or local.
 
 ## Kilo
 

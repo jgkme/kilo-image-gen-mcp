@@ -15,6 +15,7 @@ docker compose -f withoutbg-daemon/docker-compose.yml up -d
 - Verify `IMAGE_MCP_LOCAL_ENDPOINT` is correct.
 - Make sure the local model server is already running.
 - If you enabled bootstrap, check that the selected runtime actually has a local launch command.
+- Run `node ./scripts/bootstrap-local-runtime.mjs` to print the expected startup command and endpoint values.
 
 ## Can it use app-bundled models?
 
@@ -26,6 +27,11 @@ docker compose -f withoutbg-daemon/docker-compose.yml up -d
 
 - Set `IMAGE_MCP_LOCAL_MODEL` explicitly.
 - Make sure the model slug matches the runtime wrapper.
+
+## Auto-selected provider looks wrong
+
+- Pass an explicit `provider` if you want to override inference.
+- If `provider=auto` is used, the model slug wins before the default provider.
 
 ## Provider auth issues
 

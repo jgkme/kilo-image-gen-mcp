@@ -41,6 +41,19 @@ function summarizeContent(content = []) {
   return parts.join(' ');
 }
 
+function parseJsonContent(content = []) {
+  const text = content.find((c) => c.type === 'text')?.text || '';
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function rpcClient(child, verbose = false) {
   let id = 0;
   const pending = new Map();
@@ -103,6 +116,7 @@ const callArgs = {
   provider,
   prompt,
   output_path: outputPath,
+  ...(args.input_mode ? { input_mode: args.input_mode } : {}),
   ...(args.model ? { model: args.model } : {}),
   ...(args.quality ? { quality: args.quality } : {}),
   ...(args.purpose ? { purpose: args.purpose } : {}),
@@ -130,7 +144,42 @@ if (jsonOutput) {
 } else {
   console.log(summarizeContent(response?.result?.content));
 }
-child.kill('SIGTERM');
 
-const stat = await fs.stat(path.resolve(outputPath));
-console.log(`SAVED:${path.resolve(outputPath)}:${stat.size}`);
+if (tool === 'submit_task') {
+  const submitted = parseJsonContent(response?.result?.content);
+  const taskId = submitted?.task_id;
+  if (!taskId) throw new Error('submit_task did not return a task_id');
+  let task;
+  for (let i = 0; i < 20; i += 1) {
+    const taskResponse = await rpc.call('tools/call', { name: 'get_task', arguments: { task_id: taskId } });
+    task = parseJsonContent(taskResponse?.result?.content);
+    if (task?.status === 'completed' || task?.status === 'failed') {
+      if (jsonOutput) console.log(JSON.stringify(taskResponse, null, 2));
+      else console.log(`TASK:${task.task_id}:${task.status}`);
+      break;
+    }
+    await sleep(500);
+  }
+  if (!task) throw new Error(`Task ${taskId} did not resolve`);
+}
+
+if (tool === 'batch_generate_image') {
+  const batch = parseJsonContent(response?.result?.content);
+  const results = Array.isArray(batch?.results) ? batch.results : [];
+  if (!results.length) throw new Error('batch_generate_image did not return results');
+  for (const item of results) {
+    const resolved = item?.output_path ? path.resolve(item.output_path) : undefined;
+    if (!resolved) continue;
+    const stat = await fs.stat(resolved);
+    console.log(`SAVED:${resolved}:${stat.size}`);
+  }
+} else {
+  const stat = await fs.stat(path.resolve(outputPath));
+  console.log(`SAVED:${path.resolve(outputPath)}:${stat.size}`);
+}
+
+if (tool === 'generate_image' && ['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) {
+  console.log(`LOCAL:${provider}:${args.input_mode || 'text-to-image'}`);
+}
+
+child.kill('SIGTERM');

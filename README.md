@@ -7,6 +7,7 @@ It combines:
 - Kilo Gateway support
 - OpenAI and Gemini image generation
 - local image generation through OpenAI-compatible endpoints and local bridges for MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
+- Streamable HTTP transport via `IMAGE_MCP_TRANSPORT=http` and `npm run serve:http`
 - local background cleanup with `rmbg`, `imgly`, and a shared Docker-backed `withoutbg` daemon
 - web optimization with `sharp`
 - deterministic prompt enhancement before generation
@@ -15,6 +16,7 @@ It combines:
 
 - `generate_image` for OpenRouter-first generation with response normalization
 - `kilo_generate_image` for Kilo Gateway routing
+- provider auto-selection through `provider=auto` or model-driven inference
 - `edit_image` for prompt-driven image editing
 - local provider support for OpenAI-compatible endpoints and local bridges like MLX, ComfyUI, and Draw Things
 - `background_remove` for local cutouts and the shared local withoutBG daemon

@@ -1,6 +1,6 @@
 {
   "name": "img-gen-mcp",
-  "version": "0.8.7",
+  "version": "0.10.0",
   "description": "MCP server for image generation, local image manipulation, and web-ready finalization through compatible providers.",
   "type": "module",
   "bin": {
@@ -26,6 +26,8 @@
   ],
   "scripts": {
     "start": "node ./server.js",
+    "serve:http": "IMAGE_MCP_TRANSPORT=http node ./server.js",
+    "bootstrap:local": "node ./scripts/bootstrap-local-runtime.mjs",
     "smoke": "node ./scripts/smoke-image.mjs",
     "smoke:openrouter": "node ./scripts/smoke-image.mjs --provider openrouter --prompt 'a colorful parrot perched on a branch, simple background'",
     "smoke:openai": "node ./scripts/smoke-image.mjs --provider openai --prompt 'a red panda wearing glasses, clean studio background' --purpose portrait",
