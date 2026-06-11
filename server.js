@@ -36,7 +36,30 @@ const WITHOUTBG_DAEMON_LOCK = path.join(process.env.HOME || process.cwd(), '.loc
 
 function env(name) { return process.env[name] || ''; }
 function configuredKey(name) { const value = env(name).trim(); return value || undefined; }
-function providerKey(provider) { if (provider === 'kilo') return configuredKey('KILO_API_KEY'); if (provider === 'openrouter') return configuredKey('OPENROUTER_API_KEY'); if (provider === 'openai') return configuredKey('OPENAI_API_KEY'); if (provider === 'gemini') return configuredKey('GEMINI_API_KEY'); if (provider === 'openai-compatible' || provider === 'comfyui' || provider === 'drawthings' || provider === 'mlx') return configuredKey('IMAGE_MCP_LOCAL_API_KEY'); return undefined; }
+function configKey(name) {
+  const candidates = [
+    process.env.KILO_MCP_CONFIG,
+    process.env.KILO_CONFIG,
+    process.env.KILO_JSON,
+    process.env.IMAGE_MCP_CONFIG
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    try {
+      const parsed = candidate.trim().startsWith('{') ? JSON.parse(candidate) : undefined;
+      const value = parsed?.mcp?.imgGenMcp?.environment?.[name] || parsed?.mcp?.['img-gen-mcp']?.environment?.[name] || parsed?.environment?.[name] || parsed?.[name];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    } catch {}
+  }
+  return undefined;
+}
+function providerKey(provider) {
+  if (provider === 'kilo') return configuredKey('KILO_API_KEY') || configKey('KILO_API_KEY');
+  if (provider === 'openrouter') return configuredKey('OPENROUTER_API_KEY') || configKey('OPENROUTER_API_KEY');
+  if (provider === 'openai') return configuredKey('OPENAI_API_KEY') || configKey('OPENAI_API_KEY');
+  if (provider === 'gemini') return configuredKey('GEMINI_API_KEY') || configKey('GEMINI_API_KEY');
+  if (provider === 'openai-compatible' || provider === 'comfyui' || provider === 'drawthings' || provider === 'mlx') return configuredKey('IMAGE_MCP_LOCAL_API_KEY') || configKey('IMAGE_MCP_LOCAL_API_KEY');
+  return undefined;
+}
 function localProviderMode() { return String(env('IMAGE_MCP_LOCAL_PROVIDER') || '').trim().toLowerCase(); }
 function localEndpointBaseUrl() { return String(env('IMAGE_MCP_LOCAL_ENDPOINT') || '').trim() || undefined; }
 function localModelName() { return String(env('IMAGE_MCP_LOCAL_MODEL') || '').trim() || undefined; }
@@ -132,33 +155,121 @@ function base64Prefix(data) { return data.startsWith('data:') ? data : `data:ima
 async function readImageBuffer(input) { if (!input) return undefined; if (input.startsWith('data:')) { const base64 = input.split(',').pop() || ''; return Buffer.from(base64, 'base64'); } if (/^https?:\/\//.test(input)) { const response = await axios.get(input, { responseType: 'arraybuffer' }); return Buffer.from(response.data); } return fs.readFile(path.resolve(input)); }
 async function writeImage(outputPath, b64) { if (!outputPath) return undefined; const target = path.resolve(outputPath); await fs.writeFile(target, Buffer.from(b64, 'base64')); return target; }
 async function ensureDir(dir) { await fs.mkdir(dir, { recursive: true }); }
-async function providerChatCompletion(provider, args = {}) {
-  const model = imageModelFor(provider, args);
-  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`${provider}-${Date.now()}`);
-  await ensureDir(path.dirname(output_path));
-  const { width, height } = dimensions(args);
-  const hash = Buffer.from(`${provider}:${model}:${String(args.prompt || '')}`).toString('hex').slice(0, 6);
-  const color = {
-    r: Number.parseInt(hash.slice(0, 2), 16) || 64,
-    g: Number.parseInt(hash.slice(2, 4), 16) || 96,
-    b: Number.parseInt(hash.slice(4, 6), 16) || 160
-  };
-  const background = args.background && /^#?[0-9a-f]{6}$/i.test(String(args.background))
-    ? String(args.background).replace(/^#/, '')
-    : `${hash}`;
-  const image = await sharp({
-    create: {
-      width,
-      height,
-      channels: 4,
-      background: { r: Number.parseInt(background.slice(0, 2), 16), g: Number.parseInt(background.slice(2, 4), 16), b: Number.parseInt(background.slice(4, 6), 16), alpha: 1 }
+function normalizeProviderResponseData(data) {
+  if (!data || typeof data !== 'object') return {};
+  return data;
+}
+function extractImageSource(data) {
+  const normalized = normalizeProviderResponseData(data);
+  const queue = [];
+  if (Array.isArray(normalized.choices)) queue.push(...normalized.choices);
+  if (Array.isArray(normalized.data)) queue.push(...normalized.data);
+  if (Array.isArray(normalized.output)) queue.push(...normalized.output);
+  if (normalized.message) queue.push(normalized.message);
+  for (const item of queue) {
+    if (!item) continue;
+    const message = item.message || item;
+    if (Array.isArray(message?.images)) {
+      for (const image of message.images) {
+        const source = image?.url || image?.data || image?.base64 || image?.b64_json || image?.image;
+        if (typeof source === 'string' && /^data:image\//.test(source)) return source;
+        if (typeof source === 'string' && /^https?:\/\//.test(source)) return source;
+        if (typeof source === 'string' && /^[A-Za-z0-9+/=]+$/.test(source) && source.length > 128) return `data:image/png;base64,${source}`;
+      }
     }
-  })
-    .composite([{ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="rgba(${color.r},${color.g},${color.b},0.25)"/><text x="50%" y="50%" font-family="Arial" font-size="42" fill="white" text-anchor="middle" dominant-baseline="middle">${provider}</text><text x="50%" y="58%" font-family="Arial" font-size="18" fill="white" text-anchor="middle" dominant-baseline="middle">${String(args.prompt || '').slice(0, 80).replace(/[&<>]/g, '')}</text></svg>`), top: 0, left: 0 }])
-    .png()
-    .toBuffer();
-  await fs.writeFile(output_path, image);
-  return { output_path, model, backend: provider, action: args.input_image || args.reference_image ? 'edit_image' : 'generate_image', mimeType: 'image/png', bytes: image.length };
+    const content = message?.content;
+    if (typeof content === 'string') {
+      if (/^data:image\//.test(content) || /^https?:\/\//.test(content)) return content;
+    }
+    if (Array.isArray(content)) {
+      for (const part of content) {
+        const source = part?.image || part?.url || part?.data || part?.base64 || part?.b64_json;
+        if (typeof source === 'string' && /^data:image\//.test(source)) return source;
+        if (typeof source === 'string' && /^https?:\/\//.test(source)) return source;
+        if (typeof source === 'string' && /^[A-Za-z0-9+/=]+$/.test(source) && source.length > 128) return `data:image/png;base64,${source}`;
+      }
+    }
+    const directSource = item?.url || item?.data || item?.base64 || item?.b64_json || item?.image;
+    if (typeof directSource === 'string' && /^data:image\//.test(directSource)) return directSource;
+    if (typeof directSource === 'string' && /^https?:\/\//.test(directSource)) return directSource;
+    if (typeof directSource === 'string' && /^[A-Za-z0-9+/=]+$/.test(directSource) && directSource.length > 128) return `data:image/png;base64,${directSource}`;
+  }
+  return undefined;
+}
+async function downloadImageSource(imageSource, output_path) {
+  const target = path.resolve(output_path);
+  await ensureDir(path.dirname(target));
+  const buffer = /^data:image\//.test(imageSource)
+    ? Buffer.from(imageSource.split(',').pop() || '', 'base64')
+    : Buffer.from((await axios.get(imageSource, { responseType: 'arraybuffer', timeout: localTimeoutMs() })).data);
+  await fs.writeFile(target, buffer);
+  return { output_path: target, bytes: buffer.length };
+}
+async function openrouterGenerate(args = {}) {
+  const model = imageModelFor('openrouter', args);
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`openrouter-${Date.now()}`);
+  const response = await axios.post('https://openrouter.ai/api/v1/chat/completions', {
+    model,
+    messages: [{ role: 'user', content: promptWithAspect(args) }],
+    modalities: modalitiesForModel('openrouter', model, args.modalities),
+    ...(Number.isFinite(Number(args.max_tokens)) ? { max_tokens: Number(args.max_tokens) } : {}),
+    ...(providerQuality('openrouter', args) ? { reasoning: { effort: providerQuality('openrouter', args) } } : {})
+  }, {
+    headers: {
+      Authorization: `Bearer ${requireProviderKey('openrouter')}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': env('OPENROUTER_HTTP_REFERER') || 'https://github.com/jgkme/img-gen-mcp',
+      'X-Title': env('OPENROUTER_X_TITLE') || 'img-gen-mcp'
+    },
+    timeout: localTimeoutMs()
+  });
+  const imageSource = extractImageSource(normalizeProviderResponseData(response.data));
+  if (!imageSource) throw new Error(`OpenRouter did not return image content`);
+  const saved = await downloadImageSource(imageSource, output_path);
+  return { output_path: saved.output_path, model, backend: 'openrouter', action: args.input_image || args.reference_image ? 'edit_image' : 'generate_image', mimeType: 'image/png', bytes: saved.bytes };
+}
+async function openaiGenerate(args = {}) {
+  const model = imageModelFor('openai', args);
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`openai-${Date.now()}`);
+  const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+    model,
+    messages: [{ role: 'user', content: promptWithAspect(args) }],
+    modalities: modalitiesForModel('openai', model, args.modalities),
+    ...(Number.isFinite(Number(args.max_tokens)) ? { max_tokens: Number(args.max_tokens) } : {})
+  }, {
+    headers: {
+      Authorization: `Bearer ${requireProviderKey('openai')}`,
+      'Content-Type': 'application/json'
+    },
+    timeout: localTimeoutMs()
+  });
+  const imageSource = extractImageSource(normalizeProviderResponseData(response.data));
+  if (!imageSource) throw new Error(`OpenAI did not return image content`);
+  const saved = await downloadImageSource(imageSource, output_path);
+  return { output_path: saved.output_path, model, backend: 'openai', action: args.input_image || args.reference_image ? 'edit_image' : 'generate_image', mimeType: 'image/png', bytes: saved.bytes };
+}
+async function geminiGenerate(args = {}) {
+  const model = imageModelFor('gemini', args);
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`gemini-${Date.now()}`);
+  const response = await axios.post('https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', {
+    model,
+    messages: [{ role: 'user', content: promptWithAspect(args) }],
+    modalities: modalitiesForModel('gemini', model, args.modalities),
+    ...(Number.isFinite(Number(args.max_tokens)) ? { max_tokens: Number(args.max_tokens) } : {})
+  }, {
+    headers: {
+      Authorization: `Bearer ${requireProviderKey('gemini')}`,
+      'Content-Type': 'application/json'
+    },
+    timeout: localTimeoutMs()
+  });
+  const imageSource = extractImageSource(normalizeProviderResponseData(response.data));
+  if (!imageSource) throw new Error(`Gemini did not return image content`);
+  const saved = await downloadImageSource(imageSource, output_path);
+  return { output_path: saved.output_path, model, backend: 'gemini', action: args.input_image || args.reference_image ? 'edit_image' : 'generate_image', mimeType: 'image/png', bytes: saved.bytes };
+}
+async function providerChatCompletion(provider, args = {}) {
+  throw new Error(`providerChatCompletion is a removed stub and should not be used for ${provider}`);
 }
 function outputDir() { return env('IMAGE_MCP_PROJECT_OUTPUT_DIR').trim() || DEFAULT_OUTPUT_DIR; }
 async function resolveOutputDirHint() { await ensureDir(outputDir()); }
@@ -217,7 +328,13 @@ async function generateImage(args) {
   const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
   const result = localProviders.includes(provider)
     ? { ...(await providerChatCompletion(provider, localBackendTemplate(provider, args))) }
-    : { ...(await providerChatCompletion(provider, args)) };
+    : provider === 'openrouter'
+      ? { ...(await openrouterGenerate(args)) }
+      : provider === 'openai'
+        ? { ...(await openaiGenerate(args)) }
+        : provider === 'gemini'
+          ? { ...(await geminiGenerate(args)) }
+          : (() => { throw new Error(`Unsupported provider: ${provider}`); })();
   return { ...result, analysis: analyzeGeneratedArtifact(result, args), workflow_hint: createRecommendation({ tool: 'get_provider_status', arguments: {}, reason: 'Check provider state before iterating.', confidence: 0.62 }) };
 }
 async function submitTask(args) { const provider = resolveProvider(args); const model = imageModelFor(provider, args); const task = registerTask({ provider, model, prompt: args.prompt, action: 'generate_image', output_path: args.output_path }); queueMicrotask(async () => { try { await runTask(task, () => generateImage({ ...args, provider, model })); } catch {} }); return task; }
@@ -229,7 +346,13 @@ async function editImage(args) {
   const prompt = `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`;
   const result = localProviders.includes(provider)
     ? await providerChatCompletion(provider, localBackendTemplate(provider, localEditRequest(provider, { ...args, prompt })))
-    : await providerChatCompletion(provider, { ...args, input_image: args.reference_image || args.input_image, prompt });
+    : provider === 'openrouter'
+      ? await openrouterGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image })
+      : provider === 'openai'
+        ? await openaiGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image })
+        : provider === 'gemini'
+          ? await geminiGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image })
+          : (() => { throw new Error(`Unsupported provider: ${provider}`); })();
   return { ...result, analysis: analyzeGeneratedArtifact(result, { ...args, prompt }), workflow_hint: createRecommendation({ tool: 'finalize_image', arguments: { input_image: result.output_path, trim: true }, reason: 'Edited assets often need a final trim or resize pass.', confidence: 0.74 }) };
 }
 
