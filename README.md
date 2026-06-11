@@ -2,6 +2,8 @@
 
 `img-gen-mcp` is a local-first MCP server for image generation, editing, async jobs, batch runs, background removal, optimization, and final asset delivery.
 
+It now includes workflow-aware image guidance, persisted workflow state, and explicit step tracking so iterative image jobs can survive restarts and keep better server-side history.
+
 It combines:
 - OpenRouter-first image generation
 - Kilo Gateway support
@@ -40,6 +42,12 @@ It combines:
 - prompt enhancement before generation
 - automatic web optimization after background removal/finalize
 - debug mode via `IMAGE_MCP_DEBUG=1`
+
+## Release Notes
+
+- Workflow records are now persisted to `.image-mcp-workflows.json` and can be resumed after restart.
+- `add_workflow_step` and `close_workflow_step` are available for explicit workflow lifecycle tracking.
+- `analyze_image_result` and `suggest_next_step` now inspect the actual image file for structured guidance.
 
 ## Install
 
