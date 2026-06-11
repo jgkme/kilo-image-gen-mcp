@@ -99,6 +99,8 @@ HTTP transport example:
 IMAGE_MCP_TRANSPORT=http npm run serve:http
 ```
 
+Use this form if Kilo Code times out on `npx -y img-gen-mcp` during startup, since it makes the transport mode explicit and prints startup status to stderr.
+
 Example MCP config for a local checkout:
 
 ```jsonc
