@@ -12,7 +12,7 @@ It combines:
 - async task submission and polling
 - batch image generation for prompt sweeps and variants
 - local image generation through OpenAI-compatible endpoints and local bridges for MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
-- Streamable HTTP transport via the portable `http` launcher mode
+- Streamable HTTP transport for remote deployments
 - local background cleanup with `rmbg`, `imgly`, and a shared Docker-backed `withoutbg` daemon
 - web optimization with `sharp`
 - deterministic prompt enhancement before generation
@@ -95,17 +95,9 @@ Local model environment variables:
 
 Transport and runtime flags:
 
-- `IMAGE_MCP_TRANSPORT=http` - optional compatibility env var for HTTP launcher mode
+- `IMAGE_MCP_TRANSPORT=http` - opt in to Streamable HTTP transport
 - `IMAGE_MCP_HTTP_HOST` - host for HTTP transport, defaults to `127.0.0.1`
 - `IMAGE_MCP_HTTP_PORT` - port for HTTP transport, defaults to `3333`
-
-HTTP transport example:
-
-```bash
-npx -y img-gen-mcp http
-```
-
-Use this form if your client prefers Streamable HTTP. The package accepts a portable `http` launcher mode under `npx`.
 
 Example MCP config for a local checkout:
 
@@ -135,7 +127,7 @@ Example MCP config for the published package:
   "mcp": {
     "img-gen-mcp": {
       "type": "local",
-      "command": ["npx", "-y", "img-gen-mcp", "http"],
+      "command": ["npx", "-y", "img-gen-mcp"],
       "enabled": true,
       "environment": {
         "IMAGE_MCP_DEFAULT_PROVIDER": "openrouter",
