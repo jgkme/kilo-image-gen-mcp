@@ -49,6 +49,12 @@ It combines:
 - `add_workflow_step` and `close_workflow_step` are available for explicit workflow lifecycle tracking.
 - `analyze_image_result` and `suggest_next_step` now inspect the actual image file for structured guidance.
 
+## Asset Workflows
+
+For SVG-style icons, logos, favicons, and game sprites, use the built-in asset workflow guidance in `docs/public/asset-workflows.md`.
+
+That keeps the repository self-contained for npm/GitHub users without asking them to install extra marketplace skills.
+
 ## Install
 
 ```bash
