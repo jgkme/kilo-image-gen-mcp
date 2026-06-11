@@ -12,3 +12,4 @@ docs/superpowers/plans/
 docs/superpowers/
 .image-mcp-workflows.json
 .image-mcp-last-workflow-id
+.image-mcp-last-output-path

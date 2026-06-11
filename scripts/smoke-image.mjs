@@ -100,10 +100,14 @@ const jsonOutput = Boolean(args.json);
 const verbose = Boolean(args.verbose);
 const localEndpoint = args.local_endpoint || process.env.IMAGE_MCP_LOCAL_ENDPOINT;
 const workflowIdFile = path.resolve('.image-mcp-last-workflow-id');
+const lastOutputFile = path.resolve('.image-mcp-last-output-path');
 let cachedWorkflowId = args.workflow_id;
 
 await fs.mkdir(path.dirname(outputPath), { recursive: true });
 try { await fs.unlink(outputPath); } catch {}
+if (tool !== 'resume_workflow' && tool !== 'get_workflow' && tool !== 'update_workflow' && tool !== 'finalize_workflow' && tool !== 'suggest_next_step' && tool !== 'add_workflow_step' && tool !== 'close_workflow_step') {
+  try { await fs.unlink(workflowIdFile); } catch {}
+}
 
 const env = { ...process.env };
 if (localEndpoint) env.IMAGE_MCP_LOCAL_ENDPOINT = localEndpoint;
@@ -143,7 +147,7 @@ const callArgs = {
   ...(args.trim !== undefined ? { trim: args.trim } : {})
 };
 
-if (['get_workflow', 'resume_workflow', 'update_workflow', 'finalize_workflow', 'suggest_next_step'].includes(tool)) {
+if (['get_workflow', 'resume_workflow', 'update_workflow', 'finalize_workflow', 'suggest_next_step', 'add_workflow_step', 'close_workflow_step'].includes(tool)) {
   try { cachedWorkflowId = cachedWorkflowId || String(await fs.readFile(workflowIdFile, 'utf8')).trim(); } catch {}
   if (cachedWorkflowId) callArgs.workflow_id = cachedWorkflowId;
 }
@@ -194,7 +198,7 @@ if (tool === 'create_workflow' || tool === 'get_workflow' || tool === 'resume_wo
   if (Array.isArray(parsed?.next_steps) && parsed.next_steps.length) console.log(`NEXT:${parsed.next_steps[0].suggested_tool}`);
 }
 
-const noFileTools = new Set(['create_workflow', 'resume_workflow', 'update_workflow', 'get_workflow', 'finalize_workflow', 'suggest_next_step', 'analyze_image_result', 'inspect_cutout', 'compare_variants']);
+const noFileTools = new Set(['create_workflow', 'resume_workflow', 'update_workflow', 'add_workflow_step', 'close_workflow_step', 'get_workflow', 'finalize_workflow', 'suggest_next_step', 'analyze_image_result', 'inspect_cutout', 'compare_variants']);
 
 if (tool === 'batch_generate_image') {
   const batch = parseJsonContent(response?.result?.content);
@@ -213,6 +217,7 @@ if (tool === 'batch_generate_image') {
 
 if (tool === 'generate_image' || tool === 'edit_image') {
   const parsed = extractStructuredResult(response);
+  if (parsed?.output_path) await fs.writeFile(lastOutputFile, parsed.output_path);
   if (parsed?.workflow_id) console.log(`WORKFLOW:${parsed.workflow_id}`);
   if (Array.isArray(parsed?.next_steps) && parsed.next_steps.length) console.log(`NEXT:${parsed.next_steps[0].suggested_tool}`);
 }

@@ -82,7 +82,7 @@ async function main() {
 
     if (resumed.workflow_id !== created.workflow_id) throw new Error('resume_workflow returned a different workflow');
 
-    const withStep = parseWorkflow(parseText(await call('tools/call', {
+    const stepAdded = parseWorkflow(parseText(await call('tools/call', {
       name: 'add_workflow_step',
       arguments: {
         workflow_id: created.workflow_id,
@@ -93,13 +93,13 @@ async function main() {
       }
     })));
 
-    if (!Array.isArray(withStep.steps) || withStep.steps.length !== 1) throw new Error('add_workflow_step did not append a step');
+    if (!Array.isArray(stepAdded.steps) || stepAdded.steps.length !== 1) throw new Error('add_workflow_step did not append a step');
 
     const closed = parseWorkflow(parseText(await call('tools/call', {
       name: 'close_workflow_step',
       arguments: {
         workflow_id: created.workflow_id,
-        step_id: withStep.steps[0].step_id,
+        step_id: stepAdded.steps[0].step_id,
         status: 'completed',
         summary: 'Finalized for delivery'
       }
