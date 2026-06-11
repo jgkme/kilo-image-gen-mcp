@@ -29,6 +29,7 @@ Constraints: no text, no watermark, sharp focus.
 - Set `model` only when you need a specific model override.
 - Set `output_path` when you want a deterministic file path on disk.
 - For logo, favicon, or website asset work, switch to the `website-asset-workflow` skill so generation is paired with crop, background removal, and optimization guidance.
+- For sprite sheets, transparent frames, or game UI assets, switch to the `sprite-workflow` skill so generation stays focused on readable small-scale assets and game-ready exports.
 
 ## Good practice
 

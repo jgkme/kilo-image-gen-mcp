@@ -32,3 +32,4 @@ Preserve the background and clothing unless the change requires otherwise.
 - Say what must not change.
 - Avoid bundling background changes, subject changes, and style changes into one prompt unless you truly want all three.
 - For brand refreshes, logo cleanup, or hero art, hand off to `website-asset-workflow` after the edit if the output needs trimming, transparency, or delivery-ready export.
+- For sprite cleanup or game UI touchups, hand off to `sprite-workflow` after the edit if the output needs transparent framing, simplification, or sheet-style export.

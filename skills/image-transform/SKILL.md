@@ -15,6 +15,7 @@ Use this skill when the task is to reshape an existing image without changing it
 - Use `finalize_image` when you want crop, trim, resize, and optional background removal in one step.
 - Use `output_path` when you want a stable file path.
 - Use `website-asset-workflow` for logo, favicon, and site-asset delivery guidance when the resize is part of a broader web pipeline.
+- Use `sprite-workflow` for sprite sheets, transparent frame exports, and game-ready asset guidance when the resize is part of a broader game-art pipeline.
 
 ## Decision guide
 
