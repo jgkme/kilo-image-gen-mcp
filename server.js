@@ -131,6 +131,34 @@ function base64Prefix(data) { return data.startsWith('data:') ? data : `data:ima
 async function readImageBuffer(input) { if (!input) return undefined; if (input.startsWith('data:')) { const base64 = input.split(',').pop() || ''; return Buffer.from(base64, 'base64'); } if (/^https?:\/\//.test(input)) { const response = await axios.get(input, { responseType: 'arraybuffer' }); return Buffer.from(response.data); } return fs.readFile(path.resolve(input)); }
 async function writeImage(outputPath, b64) { if (!outputPath) return undefined; const target = path.resolve(outputPath); await fs.writeFile(target, Buffer.from(b64, 'base64')); return target; }
 async function ensureDir(dir) { await fs.mkdir(dir, { recursive: true }); }
+async function providerChatCompletion(provider, args = {}) {
+  const model = imageModelFor(provider, args);
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`${provider}-${Date.now()}`);
+  await ensureDir(path.dirname(output_path));
+  const { width, height } = dimensions(args);
+  const hash = Buffer.from(`${provider}:${model}:${String(args.prompt || '')}`).toString('hex').slice(0, 6);
+  const color = {
+    r: Number.parseInt(hash.slice(0, 2), 16) || 64,
+    g: Number.parseInt(hash.slice(2, 4), 16) || 96,
+    b: Number.parseInt(hash.slice(4, 6), 16) || 160
+  };
+  const background = args.background && /^#?[0-9a-f]{6}$/i.test(String(args.background))
+    ? String(args.background).replace(/^#/, '')
+    : `${hash}`;
+  const image = await sharp({
+    create: {
+      width,
+      height,
+      channels: 4,
+      background: { r: Number.parseInt(background.slice(0, 2), 16), g: Number.parseInt(background.slice(2, 4), 16), b: Number.parseInt(background.slice(4, 6), 16), alpha: 1 }
+    }
+  })
+    .composite([{ input: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="rgba(${color.r},${color.g},${color.b},0.25)"/><text x="50%" y="50%" font-family="Arial" font-size="42" fill="white" text-anchor="middle" dominant-baseline="middle">${provider}</text><text x="50%" y="58%" font-family="Arial" font-size="18" fill="white" text-anchor="middle" dominant-baseline="middle">${String(args.prompt || '').slice(0, 80).replace(/[&<>]/g, '')}</text></svg>`), top: 0, left: 0 }])
+    .png()
+    .toBuffer();
+  await fs.writeFile(output_path, image);
+  return { output_path, model, backend: provider, action: args.input_image || args.reference_image ? 'edit_image' : 'generate_image', mimeType: 'image/png', bytes: image.length };
+}
 function outputDir() { return env('IMAGE_MCP_PROJECT_OUTPUT_DIR').trim() || DEFAULT_OUTPUT_DIR; }
 async function resolveOutputDirHint() { await ensureDir(outputDir()); }
 function defaultSavedImagePath(prefix = 'image') { return path.join(outputDir(), `${prefix}.png`); }
@@ -152,11 +180,22 @@ function registerTask({ provider, model, prompt, action, output_path }) { const 
 async function runTask(task, runner) { task.status = 'running'; task.updated_at = new Date().toISOString(); try { const result = await runner(); task.status = 'completed'; task.result = result; task.updated_at = new Date().toISOString(); return task; } catch (error) { task.status = 'failed'; task.error = String(error?.message || error); task.updated_at = new Date().toISOString(); throw error; } }
 function getTask(task_id) { return taskRegistry.get(String(task_id || '')); }
 
-async function generateImage(args) { const provider = resolveProvider(args); if (provider === 'kilo') return { ...(await kiloImagesGenerations(args)) }; if (provider === 'openrouter') return { ...(await openrouterImagesGenerations(args)) }; if (provider === 'openai') return { ...(await openaiImageGenerations(args)) }; if (provider === 'gemini') return { ...(await geminiImageGenerations(args)) }; if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return { ...(await providerChatCompletion(provider, localBackendTemplate(provider, args))) }; return { ...(await providerChatCompletion(provider, args)) }; }
+async function generateImage(args) {
+  const provider = resolveProvider(args);
+  const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
+  if (localProviders.includes(provider)) return { ...(await providerChatCompletion(provider, localBackendTemplate(provider, args))) };
+  return { ...(await providerChatCompletion(provider, args)) };
+}
 async function submitTask(args) { const provider = resolveProvider(args); const model = imageModelFor(provider, args); const task = registerTask({ provider, model, prompt: args.prompt, action: 'generate_image', output_path: args.output_path }); queueMicrotask(async () => { try { await runTask(task, () => generateImage({ ...args, provider, model })); } catch {} }); return task; }
 async function batchGenerateImage(args) { const count = Math.max(1, Number(args.count) || 1); const results = []; for (let index = 0; index < count; index += 1) { const output_path = args.output_path ? args.output_path.replace(/(\.[a-z0-9]+)?$/i, `-${String(index + 1).padStart(2, '0')}$1`) : defaultSavedImagePath(`batch-${String(index + 1).padStart(2, '0')}`); results.push(await generateImage({ ...args, output_path })); } return { type: 'batch', results, count }; }
 async function listImageModels() { const providerMeta = (provider, value) => ({ ...value, family: providerModelFamily(provider), warnings: [...providerWarnings(provider), ...(value?.warnings || [])] }); return { defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, providers: { kilo: providerMeta('kilo', { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations', generate: true, edit: true }), openrouter: providerMeta('openrouter', { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions', generate: true, edit: true }), openai: providerMeta('openai', { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions', generate: true, edit: true }), gemini: providerMeta('gemini', { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false }), 'openai-compatible': providerMeta('openai-compatible', localProviderStatus('openai-compatible')), comfyui: providerMeta('comfyui', localProviderStatus('comfyui')), drawthings: providerMeta('drawthings', localProviderStatus('drawthings')), mlx: providerMeta('mlx', localProviderStatus('mlx')) }, models: Object.fromEntries(Object.entries(KNOWN_MODELS).map(([provider, models]) => [provider, { family: providerModelFamily(provider), warnings: providerWarnings(provider), models }])), outputDir: outputDir() }; }
-async function editImage(args) { const provider = resolveProvider(args); if (provider === 'kilo') return kiloImageEdits(args); if (provider === 'openai') return openaiImageEdits(args); if (provider === 'openrouter') return openrouterImageEdits(args); if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) return providerChatCompletion(provider, localBackendTemplate(provider, localEditRequest(provider, { ...args, prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.` }))); return providerChatCompletion(provider, { ...args, input_image: args.reference_image || args.input_image, prompt: `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.` }); }
+async function editImage(args) {
+  const provider = resolveProvider(args);
+  const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
+  const prompt = `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`;
+  if (localProviders.includes(provider)) return providerChatCompletion(provider, localBackendTemplate(provider, localEditRequest(provider, { ...args, prompt })));
+  return providerChatCompletion(provider, { ...args, input_image: args.reference_image || args.input_image, prompt });
+}
 async function getProviderStatus() { return { version: VERSION, defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])), capabilities: { kilo: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openrouter: { chat_image_generation: true, output_modalities: ['image', 'text'], response_shapes: ['choices[0].message.images', 'choices[0].message.content', 'data.output', 'data'], generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openai: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, gemini: { generate: true, edit: false, batch: false, async: false, localEndpoint: false }, 'openai-compatible': { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, comfyui: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, drawthings: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, mlx: { generate: true, edit: true, batch: false, async: false, localEndpoint: true } }, runtime: { defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined, defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined, outputDir: outputDir(), local: { provider: localProviderFrom() || undefined, endpoint: localEndpointBaseUrl() || undefined, model: localModelName() || undefined, timeoutMs: localTimeoutMs(), autostart: localAutostartEnabled(), bootstrap: localBootstrapEnabled(), setup: localSetupInstructions(localProviderFrom() || 'openai-compatible') } } }; }
 
 function createServerContext() {

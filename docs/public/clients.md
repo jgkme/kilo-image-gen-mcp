@@ -19,7 +19,7 @@ If you want the server to infer a provider from the model slug, use `provider=au
 
 For local-only use, a bridge or endpoint is the right path: MLX-VLM on macOS, llama.cpp server mode, LM Studio, ComfyUI bridges, or Draw Things bridges.
 
-The tools `list_image_models` and `get_provider_status` now expose warnings and capability hints so clients can display whether a provider is cloud-backed or local.
+The tools `list_image_models`, `get_provider_status`, and `get_model_capabilities` expose warnings and capability hints so clients can display whether a provider is cloud-backed or local.
 
 ## Kilo
 
@@ -102,3 +102,5 @@ The tools `list_image_models` and `get_provider_status` now expose warnings and 
 - Some clients use `environment` instead of `env`.
 - The server only reads standard process environment variables.
 - Set provider API keys in the same environment block.
+- If your client supports long-running polling, prefer `submit_task` and `get_task` for larger generations.
+- If your client supports multiple invocations in one workflow, `batch_generate_image` is the cleanest way to compare prompt variants.

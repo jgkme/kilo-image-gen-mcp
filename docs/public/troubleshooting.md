@@ -28,10 +28,22 @@ docker compose -f withoutbg-daemon/docker-compose.yml up -d
 - Set `IMAGE_MCP_LOCAL_MODEL` explicitly.
 - Make sure the model slug matches the runtime wrapper.
 
+## Bootstrap helper prints the wrong instructions
+
+- Verify `IMAGE_MCP_LOCAL_PROVIDER` matches the runtime you actually want.
+- Run `node ./scripts/bootstrap-local-runtime.mjs` with the same environment block you pass to the MCP client.
+- If you are using a local endpoint that is already running, disable bootstrap mode and point `IMAGE_MCP_LOCAL_ENDPOINT` directly at it.
+
 ## Auto-selected provider looks wrong
 
 - Pass an explicit `provider` if you want to override inference.
 - If `provider=auto` is used, the model slug wins before the default provider.
+
+## HTTP transport does not start
+
+- Make sure `IMAGE_MCP_TRANSPORT=http` is set.
+- Start the server with `npm run serve:http` instead of `npm start`.
+- Verify the client supports Streamable HTTP MCP transport.
 
 ## Provider auth issues
 

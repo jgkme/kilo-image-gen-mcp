@@ -26,6 +26,14 @@
 - `drawthings` - Draw Things on macOS
 - `llama.cpp` - local server mode on PC/Linux
 
+## Input modes
+
+- `text` for normal generation
+- `image-to-image` for edits and guided variation
+- `reference` when you want the model to use a source image without treating it as a hard edit
+
+Use `input_image` and `reference_image` with either local file paths or URLs when the backend accepts remote fetches.
+
 ## Backend notes
 
 - `comfyui` is best for workflow-heavy generation, image-to-image, and future inpainting/outpainting paths.

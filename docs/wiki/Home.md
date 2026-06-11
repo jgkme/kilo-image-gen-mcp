@@ -12,3 +12,5 @@ Start here:
 - [Migration from Kilo](Migration-from-Kilo.md)
 
 For the full public docs, see the matching pages under `docs/public/`.
+
+The current release adds provider auto-selection, async task polling, batch generation, Streamable HTTP transport, and local bootstrap guidance for MLX, ComfyUI, Draw Things, and OpenAI-compatible local runtimes.

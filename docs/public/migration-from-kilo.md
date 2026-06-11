@@ -13,6 +13,7 @@ The runtime behavior stays the same, but the public product name is now `img-gen
 - OpenRouter, OpenAI, Gemini, and Kilo Gateway provider support
 - `rmbg`, `imgly`, and `withoutbg` backends
 - `background_remove`, `finalize_image`, and `optimize_image`
+- `list_image_models`, `get_provider_status`, `get_model_capabilities`, `submit_task`, `get_task`, and `batch_generate_image`
 - prompt enhancement and web optimization behavior
 
 ## What to update in your config

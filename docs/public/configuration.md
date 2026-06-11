@@ -70,6 +70,16 @@ If you set `provider` to `auto` in a tool call, the server infers the best provi
 - `recraft/recraft-v4.1-vector` -> `openrouter`
 - local wrapper slugs -> the configured local provider
 
+## Transport
+
+The default transport is stdio. To run the server over Streamable HTTP, set `IMAGE_MCP_TRANSPORT=http` and start the package with `npm run serve:http`.
+
+## Guidance
+
+- Use `IMAGE_MCP_LOCAL_BOOTSTRAP=1` when you want the server to report the expected endpoint and startup advice for a local runtime.
+- Set `IMAGE_MCP_DEBUG=1` when you need raw payloads and fuller provider errors.
+- Set `IMAGE_MCP_LOCAL_AUTOSTART=1` only when you are comfortable letting the server attempt a local launch.
+
 ## Shared withoutBG daemon
 
 Run the daemon once and reuse it across all MCP clients:

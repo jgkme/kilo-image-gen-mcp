@@ -33,3 +33,10 @@ A clean studio portrait of a curly-fur dog, plain background, centered compositi
 ```
 
 If you want transparent cutouts, use `background_remove` or `finalize_image` after generation.
+
+## Useful next steps
+
+- Use `provider=auto` once you know the model slug you want.
+- Use `submit_task` when a client needs to poll long-running work instead of waiting synchronously.
+- Use `batch_generate_image` when you want several prompt variants at once.
+- Use `IMAGE_MCP_TRANSPORT=http` if your client prefers Streamable HTTP over stdio.

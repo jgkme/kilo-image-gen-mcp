@@ -2,4 +2,4 @@
 
 This page mirrors `docs/public/migration-from-kilo.md`.
 
-It explains the branding change and what stayed stable in the runtime.
+It explains the branding change and what stayed stable in the runtime, including the newer model discovery, async, batch, and HTTP transport features.

@@ -47,3 +47,4 @@ These are example slugs users may expose through a local provider or wrapper:
 - Provider availability can still vary by account, OpenRouter routing, and local runtime wrapper.
 - `list_image_models` now reports provider families, warnings, and capability hints for local versus cloud backends.
 - `provider=auto` uses model inference first, then falls back to the configured default provider.
+- `get_model_capabilities` summarizes whether a model is generation-only, edit-capable, local-friendly, or better suited to image-to-image workflows.

@@ -8,3 +8,5 @@ dist/
 generated-images/
 .plans/
 docs/superpowers/plans/
+.kilo/skills/
+docs/superpowers/

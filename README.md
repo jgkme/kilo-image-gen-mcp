@@ -1,11 +1,14 @@
 # img-gen-mcp
 
-`img-gen-mcp` is a local-first MCP server for image generation, editing, background removal, optimization, and final asset delivery.
+`img-gen-mcp` is a local-first MCP server for image generation, editing, async jobs, batch runs, background removal, optimization, and final asset delivery.
 
 It combines:
 - OpenRouter-first image generation
 - Kilo Gateway support
 - OpenAI and Gemini image generation
+- provider auto-selection and model-driven routing
+- async task submission and polling
+- batch image generation for prompt sweeps and variants
 - local image generation through OpenAI-compatible endpoints and local bridges for MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
 - Streamable HTTP transport via `IMAGE_MCP_TRANSPORT=http` and `npm run serve:http`
 - local background cleanup with `rmbg`, `imgly`, and a shared Docker-backed `withoutbg` daemon
@@ -17,8 +20,13 @@ It combines:
 - `generate_image` for OpenRouter-first generation with response normalization
 - `kilo_generate_image` for Kilo Gateway routing
 - provider auto-selection through `provider=auto` or model-driven inference
+- `list_image_models` for provider/model discovery with warnings and capability hints
+- `get_provider_status` for backend readiness and local bootstrap guidance
+- `get_model_capabilities` for a compact capability summary
 - `edit_image` for prompt-driven image editing
 - local provider support for OpenAI-compatible endpoints and local bridges like MLX, ComfyUI, and Draw Things
+- `submit_task` and `get_task` for async generation workflows
+- `batch_generate_image` for running multiple prompts in one request
 - `background_remove` for local cutouts and the shared local withoutBG daemon
 - `resize_image` and `auto_crop` for deterministic local transforms
 - `optimize_image` for web-ready re-encoding and compression
@@ -57,6 +65,14 @@ Local model environment variables:
 - `IMAGE_MCP_LOCAL_BOOTSTRAP=1` - opt-in bootstrap helper mode
 - `IMAGE_MCP_LOCAL_TIMEOUT_MS` - request timeout for local endpoints
 - `IMAGE_MCP_LOCAL_API_KEY` - optional local auth token
+- `IMAGE_MCP_TRANSPORT=http` - opt in to Streamable HTTP transport
+- `IMAGE_MCP_DEBUG=1` - include detailed tool errors and provider payloads
+
+HTTP transport example:
+
+```bash
+IMAGE_MCP_TRANSPORT=http npm run serve:http
+```
 
 Example MCP config:
 
@@ -101,6 +117,14 @@ Local examples:
 
 See `docs/public/clients.md` for ready-to-use examples for Kilo, Cursor, and generic MCP clients.
 
+## Guidance
+
+- Use `provider=auto` when you want the server to infer the backend from a model slug.
+- Use `submit_task` for long-running generations when your client prefers polling.
+- Use `batch_generate_image` when you want multiple prompt variants without reconfiguring the client.
+- Use `get_provider_status` before troubleshooting a local runtime so you can see the expected endpoint and startup hint.
+- Use `IMAGE_MCP_LOCAL_BOOTSTRAP=1` when you want the server to print setup guidance for the configured local adapter.
+
 ## App Model Access
 
 `img-gen-mcp` cannot automatically use the image models built into Cursor, Claude Code, or Codex.
@@ -116,6 +140,8 @@ It can only use a model source that is exposed to it as a separate provider or l
 
 If you want a zero-cloud setup, use a local backend such as MLX-VLM on macOS or an OpenAI-compatible local server like llama.cpp, LM Studio, ComfyUI, or a Draw Things bridge.
 
+For local adapters, the package supports explicit `input_mode`, `input_image`, and `reference_image` flows so image-to-image and edit workflows can pass files or URLs directly.
+
 ## Workflow
 
 The typical pipeline is:
@@ -125,6 +151,8 @@ The typical pipeline is:
 3. Inspect the cutout on multiple backgrounds
 4. Optimize the final asset for the web
 5. Save and ship the final PNG/WebP/JPEG/AVIF
+
+For complex generation work, prefer a model-first flow: pick a model, let `provider=auto` resolve the backend, then use async polling or batch generation if your client needs better control.
 
 ## Common Uses
 
@@ -165,6 +193,14 @@ Recommended defaults:
 - Logos / vector-like work: `recraft/recraft-v4.1-vector`
 - Broad prompt-following general use: `sourceful/riverflow-v2.5-pro`
 
+## Local backends
+
+- `openai-compatible` for any `/v1`-style local server
+- `mlx` for macOS local model wrappers
+- `comfyui` for workflow-driven generation
+- `drawthings` for a running macOS app bridge
+- `llama.cpp` for a lightweight local OpenAI-compatible endpoint
+
 ## Background Removal Backends
 
 - `rmbg` - fastest lightweight local cleanup
@@ -191,9 +227,10 @@ Use `optimize_image` directly when you want explicit control:
 
 ## Docs
 
-- Public docs drafts live in `docs/public/`
+- Public docs live in `docs/public/`
 - Wiki-ready pages live in `docs/wiki/`
 - Migration notes and setup details are documented there for public release
+- The `list_image_models`, `get_provider_status`, and `get_model_capabilities` tools are documented there as part of the release-facing API surface
 
 ## Troubleshooting
 

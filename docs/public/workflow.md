@@ -19,6 +19,13 @@ generate -> background_remove/finalize -> inspect -> optimize -> deliver
 - **Remote reference:** pass an `http(s)` URL in `input_image` or `reference_image` when the backend accepts remote fetches
 - **Local upload:** pass a local file path in `input_image` or `reference_image` for one-shot generation or edits
 
+## Decision guide
+
+- Use `submit_task` when the request is long-running and your client prefers polling.
+- Use `batch_generate_image` when you want several prompt variants back from one request.
+- Use `provider=auto` when the model slug already implies the backend family.
+- Use `get_provider_status` before switching local runtimes so you can verify endpoint, model, and bootstrap guidance.
+
 ## Inspection
 
 `background_remove` and `finalize_image` emit multi-background inspection sheets to make halos and matte residue easier to spot.
