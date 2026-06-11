@@ -395,6 +395,131 @@ function registerWorkflowForGenerate(args, result) { const workflow = createWork
 function registerWorkflowForEdit(args, result) { const workflow = createWorkflow({ objective: args.prompt, provider: resolveProvider(args), model: result.model, prompt: args.prompt, output_path: result.output_path, context: { tool: 'edit_image' } }); appendWorkflowStep(workflow, { tool: 'edit_image', result }); return workflow; }
 async function getProviderStatus() { return { version: VERSION, defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])), capabilities: { kilo: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openrouter: { chat_image_generation: true, output_modalities: ['image', 'text'], response_shapes: ['choices[0].message.images', 'choices[0].message.content', 'data.output', 'data'], generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openai: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, gemini: { generate: true, edit: false, batch: false, async: false, localEndpoint: false }, 'openai-compatible': { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, comfyui: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, drawthings: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, mlx: { generate: true, edit: true, batch: false, async: false, localEndpoint: true } }, runtime: { defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined, defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined, outputDir: outputDir(), local: { provider: localProviderFrom() || undefined, endpoint: localEndpointBaseUrl() || undefined, model: localModelName() || undefined, timeoutMs: localTimeoutMs(), autostart: localAutostartEnabled(), bootstrap: localBootstrapEnabled(), setup: localSetupInstructions(localProviderFrom() || 'openai-compatible') } } }; }
 
+async function resizeImage(args = {}) {
+  const { input_image, width, height, fit = 'cover', background } = args;
+  const buffer = await readImageBuffer(input_image);
+  let pipeline = sharp(buffer);
+  if (Number.isFinite(width) && Number.isFinite(height)) {
+    pipeline = pipeline.resize(width, height, { fit, background: background || { r: 0, g: 0, b: 0, alpha: 0 } });
+  } else if (Number.isFinite(width) || Number.isFinite(height)) {
+    pipeline = pipeline.resize(width || null, height || null);
+  }
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`resized-${Date.now()}`);
+  await pipeline.png().toFile(output_path);
+  const stat = await fs.stat(output_path);
+  return { output_path, mimeType: 'image/png', bytes: stat.size, backend: 'sharp', action: 'resize_image' };
+}
+
+async function autoCropImage(args = {}) {
+  const { input_image, width, height, gravity = 'center' } = args;
+  const buffer = await readImageBuffer(input_image);
+  const meta = await sharp(buffer).metadata();
+  const srcW = meta.width;
+  const srcH = meta.height;
+  const targetW = Number.isFinite(width) ? width : srcW;
+  const targetH = Number.isFinite(height) ? height : srcH;
+  const scale = Math.max(targetW / srcW, targetH / srcH);
+  const scaledW = Math.round(srcW * scale);
+  const scaledH = Math.round(srcH * scale);
+  let pipeline = sharp(buffer).resize(scaledW, scaledH, { fit: 'fill' });
+  if (scaledW > targetW || scaledH > targetH) {
+    const cropX = gravity.includes('west') ? 0 : gravity.includes('east') ? scaledW - targetW : Math.floor((scaledW - targetW) / 2);
+    const cropY = gravity.includes('north') ? 0 : gravity.includes('south') ? scaledH - targetH : Math.floor((scaledH - targetH) / 2);
+    pipeline = pipeline.extract({ left: Math.max(0, cropX), top: Math.max(0, cropY), width: Math.min(targetW, scaledW), height: Math.min(targetH, scaledH) });
+  }
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`cropped-${Date.now()}`);
+  await pipeline.png().toFile(output_path);
+  const stat = await fs.stat(output_path);
+  return { output_path, mimeType: 'image/png', bytes: stat.size, backend: 'sharp', action: 'auto_crop' };
+}
+
+async function optimizeImage(args = {}) {
+  const { input_image, output_format = 'png', quality = 80, compression_level, lossless = false, palette = false } = args;
+  const buffer = await readImageBuffer(input_image);
+  let pipeline = sharp(buffer);
+  const fmt = output_format === 'jpg' ? 'jpeg' : output_format;
+  const options = {};
+  if (fmt === 'jpeg' || fmt === 'webp') options.quality = quality;
+  if (fmt === 'png' && Number.isFinite(compression_level)) options.compressionLevel = compression_level;
+  if (fmt === 'webp') options.lossless = lossless;
+  if (fmt === 'png') options.palette = palette;
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`optimized-${Date.now()}.${fmt}`);
+  await pipeline.toFormat(fmt, options).toFile(output_path);
+  const stat = await fs.stat(output_path);
+  return { output_path, mimeType: `image/${fmt}`, bytes: stat.size, backend: 'sharp', action: 'optimize_image' };
+}
+
+async function backgroundRemoveImage(args = {}) {
+  const { input_image, backend = 'rmbg', model, max_resolution, alpha_feather, alpha_threshold, output_path: outPath } = args;
+  const buffer = await readImageBuffer(input_image);
+  const output_path = outPath ? path.resolve(outPath) : defaultSavedImagePath(`nobg-${Date.now()}.png`);
+  if (backend === 'withoutbg') {
+    const healthy = await withoutBgDaemonHealthy();
+    if (!healthy) throw new Error('withoutBG daemon is not running. Start it with docker-compose or set WITHOUTBG_AUTOSTART=1');
+    const form = new FormData();
+    form.append('image', buffer, { filename: 'image.png', contentType: 'image/png' });
+    if (model) form.append('model', model);
+    const response = await axios.post(`${withoutBgDaemonUrl().replace(/\/$/, '')}/remove`, form, { headers: form.getHeaders(), timeout: localTimeoutMs(), responseType: 'arraybuffer' });
+    await fs.writeFile(output_path, Buffer.from(response.data));
+  } else if (backend === 'imgly') {
+    const blob = await removeBackground(buffer, { model: model || 'medium', output: { format: 'image/png' } });
+    const arrayBuf = await blob.arrayBuffer();
+    await fs.writeFile(output_path, Buffer.from(arrayBuf));
+  } else {
+    let segModel;
+    const modelName = model || 'u2netp';
+    if (modelName === 'modnet') segModel = createModnetModel();
+    else if (modelName === 'briaai') segModel = createBriaaiModel();
+    else segModel = createU2netpModel();
+    const mask = await rmbg(buffer, segModel);
+    let sharpPipeline = sharp(buffer).ensureAlpha();
+    if (Number.isFinite(max_resolution)) {
+      const meta = await sharpPipeline.metadata();
+      if (meta.width > max_resolution || meta.height > max_resolution) {
+        sharpPipeline = sharpPipeline.resize(max_resolution, max_resolution, { fit: 'inside' });
+      }
+    }
+    const origWithAlpha = await sharpPipeline.raw().toBuffer();
+    const origMeta = await sharp(buffer).ensureAlpha().metadata();
+    const maskBuf = await sharp(mask).resize(origMeta.width, origMeta.height, { fit: 'fill' }).raw().toBuffer();
+    const channels = origMeta.channels || 4;
+    const result = Buffer.alloc(origWithAlpha.length);
+    for (let i = 0; i < origWithAlpha.length; i += channels) {
+      result[i] = origWithAlpha[i];
+      if (channels > 1) result[i + 1] = origWithAlpha[i + 1];
+      if (channels > 2) result[i + 2] = origWithAlpha[i + 2];
+      const maskIdx = Math.floor(i / channels) * (maskBuf.length > origWithAlpha.length / channels * 1 ? 4 : channels);
+      let alpha = maskBuf[maskIdx] || 0;
+      if (Number.isFinite(alpha_feather)) alpha = Math.min(255, Math.round(alpha * alpha_feather));
+      if (Number.isFinite(alpha_threshold)) alpha = alpha > alpha_threshold ? 255 : 0;
+      result[i + 3] = alpha;
+    }
+    await sharp(result, { raw: { width: origMeta.width, height: origMeta.height, channels: 4 } }).png().toFile(output_path);
+  }
+  const stat = await fs.stat(output_path);
+  return { output_path, mimeType: 'image/png', bytes: stat.size, backend, action: 'background_remove' };
+}
+
+async function finalizeImage(args = {}) {
+  const { input_image, remove_background = false, background_backend = 'rmbg', background_model, trim = false, width, height, fit = 'cover', gravity = 'center', background } = args;
+  let currentPath = path.resolve(input_image);
+  if (remove_background) {
+    const result = await backgroundRemoveImage({ input_image: currentPath, backend: background_backend, model: background_model, output_path: args.output_path });
+    currentPath = result.output_path;
+  }
+  let pipeline = sharp(await readImageBuffer(currentPath));
+  if (trim) {
+    pipeline = pipeline.trim({ threshold: 10 });
+  }
+  if (Number.isFinite(width) && Number.isFinite(height)) {
+    pipeline = pipeline.resize(width, height, { fit, position: gravity, background: background || { r: 0, g: 0, b: 0, alpha: 0 } });
+  }
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`final-${Date.now()}.png`);
+  await pipeline.png().toFile(output_path);
+  const stat = await fs.stat(output_path);
+  return { output_path, mimeType: 'image/png', bytes: stat.size, backend: 'sharp', action: 'finalize_image' };
+}
+
 function createServerContext() {
   const tools = [
     { name: 'kilo_generate_image', description: 'Generate an image using the configured provider.', inputSchema: { type: 'object', properties: { prompt: { type: 'string' }, provider: { type: 'string', enum: PROVIDERS.concat('auto') }, model: { type: 'string' }, quality: { type: 'string' }, purpose: { type: 'string' }, style: { type: 'string' }, size: { type: 'string' }, width: { type: 'number' }, height: { type: 'number' }, aspect: { type: 'string', enum: ['square', 'landscape', 'portrait'] }, steps: { type: 'number' }, input_mode: { type: 'string', enum: ['text-to-image', 'image-to-image', 'inpainting-outpainting', 'local-file', 'remote-url'] }, input_image: { type: 'string' }, reference_image: { type: 'string' }, output_path: { type: 'string' } }, required: ['prompt'] } },

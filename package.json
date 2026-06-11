@@ -1,6 +1,6 @@
 {
   "name": "img-gen-mcp",
-  "version": "0.10.7",
+  "version": "0.10.8",
   "description": "Local-first MCP server for image generation, editing, async jobs, workflow tracking, image analysis, local bridges, Streamable HTTP, and web-ready finalization.",
   "type": "module",
   "bin": {
