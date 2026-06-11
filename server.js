@@ -14,7 +14,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 
-const VERSION = '0.10.1';
+import { createRequire } from 'node:module';
+const require = createRequire(import.meta.url);
+const PACKAGE_JSON = require('./package.json');
+const VERSION = PACKAGE_JSON.version;
 const DEFAULT_MODEL = 'black-forest-labs/flux.2-pro';
 const DEFAULT_SIZE = '1024x1024';
 const DEFAULT_OUTPUT_DIR = './generated-images';
@@ -268,9 +271,6 @@ async function geminiGenerate(args = {}) {
   const saved = await downloadImageSource(imageSource, output_path);
   return { output_path: saved.output_path, model, backend: 'gemini', action: args.input_image || args.reference_image ? 'edit_image' : 'generate_image', mimeType: 'image/png', bytes: saved.bytes };
 }
-async function providerChatCompletion(provider, args = {}) {
-  throw new Error(`providerChatCompletion is a removed stub and should not be used for ${provider}`);
-}
 function outputDir() { return env('IMAGE_MCP_PROJECT_OUTPUT_DIR').trim() || DEFAULT_OUTPUT_DIR; }
 async function resolveOutputDirHint() { await ensureDir(outputDir()); }
 function defaultSavedImagePath(prefix = 'image') { return path.join(outputDir(), `${prefix}.png`); }
@@ -331,18 +331,43 @@ function cliTransportMode() {
   return 'stdio';
 }
 
+async function localGenerate(provider, args = {}) {
+  const endpoint = localEndpointBaseUrl() || localProviderEndpointHint(provider);
+  const model = imageModelFor(provider, args);
+  const output_path = args.output_path ? path.resolve(args.output_path) : defaultSavedImagePath(`local-${Date.now()}`);
+  if (!endpoint) throw new Error(`Local provider ${provider} requires IMAGE_MCP_LOCAL_ENDPOINT to be set`);
+  const response = await axios.post(`${endpoint.replace(/\/$/, '')}/v1/chat/completions`, {
+    model,
+    messages: [{ role: 'user', content: promptWithAspect(args) }],
+    modalities: modalitiesForModel(provider, model, args.modalities),
+    ...(args.input_image ? { input_image: args.input_image } : {})
+  }, {
+    headers: {
+      ...(configuredKey('IMAGE_MCP_LOCAL_API_KEY') ? { Authorization: `Bearer ${configuredKey('IMAGE_MCP_LOCAL_API_KEY')}` } : {}),
+      'Content-Type': 'application/json'
+    },
+    timeout: localTimeoutMs()
+  });
+  const imageSource = extractImageSource(normalizeProviderResponseData(response.data));
+  if (!imageSource) throw new Error(`Local provider ${provider} did not return image content`);
+  const saved = await downloadImageSource(imageSource, output_path);
+  return { output_path: saved.output_path, model, backend: provider, action: args.input_image || args.reference_image ? 'edit_image' : 'generate_image', mimeType: 'image/png', bytes: saved.bytes };
+}
+
 async function generateImage(args) {
   const provider = resolveProvider(args);
-  const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
-  const result = localProviders.includes(provider)
-    ? { ...(await providerChatCompletion(provider, localBackendTemplate(provider, args))) }
-    : provider === 'openrouter'
-      ? { ...(await openrouterGenerate(args)) }
-      : provider === 'openai'
-        ? { ...(await openaiGenerate(args)) }
-        : provider === 'gemini'
-          ? { ...(await geminiGenerate(args)) }
-          : (() => { throw new Error(`Unsupported provider: ${provider}`); })();
+  let result;
+  if (provider === 'openrouter' || provider === 'kilo') {
+    result = await openrouterGenerate(args);
+  } else if (provider === 'openai') {
+    result = await openaiGenerate(args);
+  } else if (provider === 'gemini') {
+    result = await geminiGenerate(args);
+  } else if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) {
+    result = await localGenerate(provider, args);
+  } else {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
   return { ...result, analysis: analyzeGeneratedArtifact(result, args), workflow_hint: createRecommendation({ tool: 'get_provider_status', arguments: {}, reason: 'Check provider state before iterating.', confidence: 0.62 }) };
 }
 async function submitTask(args) { const provider = resolveProvider(args); const model = imageModelFor(provider, args); const task = registerTask({ provider, model, prompt: args.prompt, action: 'generate_image', output_path: args.output_path }); queueMicrotask(async () => { try { await runTask(task, () => generateImage({ ...args, provider, model })); } catch {} }); return task; }
@@ -350,17 +375,19 @@ async function batchGenerateImage(args) { const count = Math.max(1, Number(args.
 async function listImageModels() { const providerMeta = (provider, value) => ({ ...value, family: providerModelFamily(provider), warnings: [...providerWarnings(provider), ...(value?.warnings || [])] }); return { defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, providers: { kilo: providerMeta('kilo', { configured: Boolean(env('KILO_API_KEY')), endpoint: 'https://api.kilo.ai/api/gateway/images/generations', generate: true, edit: true }), openrouter: providerMeta('openrouter', { configured: Boolean(env('OPENROUTER_API_KEY')), endpoint: 'https://openrouter.ai/api/v1/chat/completions', generate: true, edit: true }), openai: providerMeta('openai', { configured: Boolean(env('OPENAI_API_KEY')), endpoint: 'https://api.openai.com/v1/chat/completions', generate: true, edit: true }), gemini: providerMeta('gemini', { configured: Boolean(env('GEMINI_API_KEY')), endpoint: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', generate: true, edit: false }), 'openai-compatible': providerMeta('openai-compatible', localProviderStatus('openai-compatible')), comfyui: providerMeta('comfyui', localProviderStatus('comfyui')), drawthings: providerMeta('drawthings', localProviderStatus('drawthings')), mlx: providerMeta('mlx', localProviderStatus('mlx')) }, models: Object.fromEntries(Object.entries(KNOWN_MODELS).map(([provider, models]) => [provider, { family: providerModelFamily(provider), warnings: providerWarnings(provider), models }])), outputDir: outputDir() }; }
 async function editImage(args) {
   const provider = resolveProvider(args);
-  const localProviders = ['openai-compatible', 'comfyui', 'drawthings', 'mlx'];
   const prompt = `${args.prompt}\n\nEdit the provided reference image while preserving the important subject and composition unless explicitly instructed otherwise.`;
-  const result = localProviders.includes(provider)
-    ? await providerChatCompletion(provider, localBackendTemplate(provider, localEditRequest(provider, { ...args, prompt })))
-    : provider === 'openrouter'
-      ? await openrouterGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image })
-      : provider === 'openai'
-        ? await openaiGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image })
-        : provider === 'gemini'
-          ? await geminiGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image })
-          : (() => { throw new Error(`Unsupported provider: ${provider}`); })();
+  let result;
+  if (provider === 'openrouter' || provider === 'kilo') {
+    result = await openrouterGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image });
+  } else if (provider === 'openai') {
+    result = await openaiGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image });
+  } else if (provider === 'gemini') {
+    result = await geminiGenerate({ ...args, prompt, input_image: args.reference_image || args.input_image });
+  } else if (['openai-compatible', 'comfyui', 'drawthings', 'mlx'].includes(provider)) {
+    result = await localGenerate(provider, { ...args, prompt, input_image: args.reference_image || args.input_image });
+  } else {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
   return { ...result, analysis: analyzeGeneratedArtifact(result, { ...args, prompt }), workflow_hint: createRecommendation({ tool: 'finalize_image', arguments: { input_image: result.output_path, trim: true }, reason: 'Edited assets often need a final trim or resize pass.', confidence: 0.74 }) };
 }
 
