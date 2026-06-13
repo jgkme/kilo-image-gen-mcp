@@ -12,7 +12,7 @@ These skill files are bundled with the published `img-gen-mcp` package and are i
 - `website-asset-workflow` - logos, favicons, hero images, and web delivery workflow
 - `sprite-workflow` - sprite sheets, transparent frames, and game UI asset workflow
 
-The workflow-oriented skills now also map to the interactive tools in the server, including workflow IDs, next-step suggestions, and analysis helpers.
+The workflow-oriented skills now also map to the interactive tools in the server, including workflow IDs, next-step suggestions, analysis helpers, and the optional ACP automation surface.
 
 ## How to use
 
@@ -20,3 +20,4 @@ The workflow-oriented skills now also map to the interactive tools in the server
 - Use `website-asset-workflow` for any asset that needs to ship on a website or product surface.
 - Use `sprite-workflow` for sprite sheets, frame exports, or game-ready transparent assets.
 - Use the narrower skills for focused tasks when you only need a single operation.
+- Use ACP routes when a client or agent needs task lifecycle control, workflow creation, or synchronous tool execution over HTTP.

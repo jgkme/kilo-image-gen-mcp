@@ -38,6 +38,7 @@ const WITHOUTBG_DAEMON_COMPOSE = path.join(SERVER_DIR, 'withoutbg-daemon', 'dock
 const WITHOUTBG_DAEMON_LOCK = path.join(process.env.HOME || process.cwd(), '.local', 'share', 'kilo', 'locks', 'withoutbg.lock');
 
 function env(name) { return process.env[name] || ''; }
+function truthyEnv(name) { return ['1', 'true', 'yes', 'on'].includes(env(name).trim().toLowerCase()); }
 function configuredKey(name) { const value = env(name).trim(); return value || undefined; }
 function configKey(name) {
   const candidates = [
@@ -322,16 +323,60 @@ function validateStartup() {}
 
 const taskRegistry = new Map(); let taskSeq = 0;
 function nextTaskId() { taskSeq += 1; return `task_${String(taskSeq).padStart(4, '0')}`; }
-function registerTask({ provider, model, prompt, action, output_path }) { const task_id = nextTaskId(); const task = { task_id, status: 'queued', provider, model, prompt, action, output_path, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }; taskRegistry.set(task_id, task); return task; }
-async function runTask(task, runner) { task.status = 'running'; task.updated_at = new Date().toISOString(); try { const result = await runner(); task.status = 'completed'; task.result = result; task.updated_at = new Date().toISOString(); return task; } catch (error) { task.status = 'failed'; task.error = String(error?.message || error); task.updated_at = new Date().toISOString(); throw error; } }
+function registerTask({ provider, model, prompt, action, output_path, workflow_id, step_id, tool, arguments: taskArguments, acp = false }) { const task_id = nextTaskId(); const task = { task_id, status: 'queued', provider, model, prompt, action, output_path, workflow_id, step_id, tool, arguments: taskArguments, acp, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), error: null, result: null }; taskRegistry.set(task_id, task); return task; }
+async function runTask(task, runner) { task.status = 'running'; task.updated_at = new Date().toISOString(); try { const result = await runner(); task.status = 'completed'; task.result = result; task.error = null; task.updated_at = new Date().toISOString(); return task; } catch (error) { task.status = 'failed'; task.error = String(error?.message || error); task.updated_at = new Date().toISOString(); throw error; } }
 function getTask(task_id) { return taskRegistry.get(String(task_id || '')); }
+function cancelTask(task_id) { const task = getTask(task_id); if (!task) return undefined; if (task.status === 'completed' || task.status === 'failed') return task; task.status = 'cancelled'; task.cancel_requested = true; task.updated_at = new Date().toISOString(); return task; }
 
 function cliTransportMode() {
   const firstArg = String(process.argv[2] || '').toLowerCase();
   const envMode = String(env('IMAGE_MCP_TRANSPORT') || '').toLowerCase();
   if (firstArg === 'http' || firstArg === '--http' || firstArg === '--transport=http') return 'http';
+  if (firstArg === 'acp' || firstArg === '--acp') return 'http';
   if (envMode === 'http') return 'http';
   return 'stdio';
+}
+
+function acpEnabled() { return truthyEnv('IMAGE_MCP_ACP') || ['acp', '--acp'].includes(String(process.argv[2] || '').toLowerCase()) || truthyEnv('IMAGE_MCP_TRANSPORT_ACP'); }
+function acpPathPrefix() { return String(env('IMAGE_MCP_ACP_PATH') || '/acp').trim() || '/acp'; }
+function parseJsonMaybe(text) { try { return JSON.parse(text); } catch { return undefined; } }
+function parseMcpToolContent(response) { const text = response?.content?.find?.((entry) => entry.type === 'text')?.text; if (!text) return response; const parsed = parseJsonMaybe(text); return parsed ?? text; }
+async function callToolJson(context, name, args = {}) { return parseMcpToolContent(await context.callTool({ params: { name, arguments: args } })); }
+
+function sendJson(res, statusCode, payload) { res.statusCode = statusCode; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(payload, null, 2)); }
+function sendAcpResult(res, result, statusCode = 200) { sendJson(res, statusCode, { acp_version: '0.1', status: 'ok', result }); }
+function sendAcpError(res, error, statusCode = 500) { sendJson(res, statusCode, { acp_version: '0.1', status: 'error', error: { message: String(error?.message || error), code: error?.code || 'acp_error', retryable: Boolean(error?.retryable) } }); }
+async function readJsonBody(req) { const chunks = []; for await (const chunk of req) chunks.push(Buffer.from(chunk)); if (!chunks.length) return {}; const text = Buffer.concat(chunks).toString('utf8').trim(); return text ? JSON.parse(text) : {}; }
+function routeMatches(req, method, pathname, target) { return req.method === method && pathname === target; }
+
+async function buildAcpTaskResult(context, task, workflow) { return { task_id: task.task_id, workflow_id: workflow?.workflow_id || task.workflow_id || null, status: task.status, objective: workflow?.objective || task.prompt || null, created_at: task.created_at, updated_at: task.updated_at, provider: task.provider, model: task.model, tool: task.tool || task.action || null, arguments: task.arguments || {}, result: task.result || null, error: task.error || null, links: { self: `${acpPathPrefix()}/tasks/${task.task_id}`, workflow: (workflow?.workflow_id || task.workflow_id) ? `${acpPathPrefix()}/workflows/${workflow?.workflow_id || task.workflow_id}` : null } } }
+
+async function submitAcpTask(context, input = {}) { const tool = String(input.tool || 'generate_image'); const toolArgs = { ...(input.arguments || {}) }; const shouldCreateWorkflow = input.workflow !== false; const workflow = shouldCreateWorkflow ? await createWorkflow({ objective: input.objective || toolArgs.prompt || '', provider: toolArgs.provider, model: toolArgs.model, prompt: toolArgs.prompt, output_path: toolArgs.output_path, context: { source: 'acp', tool } }) : undefined; const step = workflow ? await appendWorkflowStep(workflow, { tool, status: 'queued', summary: `Queued ${tool} via ACP`, result: { arguments: toolArgs } }) : undefined; const task = registerTask({ provider: resolveProvider(toolArgs), model: imageModelFor(resolveProvider(toolArgs), toolArgs), prompt: toolArgs.prompt, action: tool, output_path: toolArgs.output_path, workflow_id: workflow?.workflow_id, step_id: step?.step_id, tool, arguments: toolArgs, acp: true }); queueMicrotask(async () => { try { if (workflow) await closeWorkflowStep(workflow.workflow_id, step.step_id, { status: 'running', summary: `Running ${tool} via ACP` }); await runTask(task, async () => { const result = await callToolJson(context, tool, toolArgs); task.workflow_id = workflow?.workflow_id || task.workflow_id; if (workflow) await closeWorkflowStep(workflow.workflow_id, step.step_id, { status: 'completed', summary: `Completed ${tool} via ACP`, result }); return result; }); } catch (error) { task.error = String(error?.message || error); if (workflow && step?.step_id) await closeWorkflowStep(workflow.workflow_id, step.step_id, { status: 'failed', summary: `Failed ${tool} via ACP`, result: { error: task.error } }).catch(() => {}); } }); return task; }
+
+async function handleAcpRequest(req, res, context) {
+  if (!acpEnabled()) return false;
+  const prefix = acpPathPrefix().replace(/\/$/, '');
+  const url = new URL(req.url, 'http://127.0.0.1');
+  if (!url.pathname.startsWith(prefix)) return false;
+  const pathname = url.pathname.slice(prefix.length) || '/';
+  try {
+    if (routeMatches(req, 'GET', pathname, '/health')) return sendAcpResult(res, { name: context.name, version: context.version, mcp: true, acp: true });
+    if (routeMatches(req, 'GET', pathname, '/agent')) return sendAcpResult(res, { name: context.name, version: context.version, description: 'Local-first image generation and asset workflow agent', capabilities: { tools: true, tasks: true, workflows: true, cancellation: 'best-effort' } });
+    if (routeMatches(req, 'GET', pathname, '/tools')) return sendAcpResult(res, await context.listTools());
+    if (routeMatches(req, 'POST', pathname, '/tasks')) { const body = await readJsonBody(req); return sendAcpResult(res, await submitAcpTask(context, body), 202); }
+    if (pathname.startsWith('/tasks/') && req.method === 'GET') { const taskId = pathname.split('/')[2]; const task = getTask(taskId); if (!task) return sendAcpError(res, Object.assign(new Error(`Unknown task: ${taskId}`), { code: 'not_found', retryable: false }), 404); const workflow = task.workflow_id ? getWorkflow(task.workflow_id) : undefined; return sendAcpResult(res, await buildAcpTaskResult(context, task, workflow)); }
+    if (pathname.startsWith('/tasks/') && pathname.endsWith('/cancel') && req.method === 'POST') { const taskId = pathname.split('/')[2]; const task = cancelTask(taskId); if (!task) return sendAcpError(res, Object.assign(new Error(`Unknown task: ${taskId}`), { code: 'not_found', retryable: false }), 404); return sendAcpResult(res, task); }
+    if (routeMatches(req, 'POST', pathname, '/workflows')) { const body = await readJsonBody(req); return sendAcpResult(res, await createWorkflow(body)); }
+    if (pathname.startsWith('/workflows/') && req.method === 'GET') { const workflowId = pathname.split('/')[2]; const workflow = await resumeWorkflow(workflowId); if (!workflow) return sendAcpError(res, Object.assign(new Error(`Unknown workflow: ${workflowId}`), { code: 'not_found', retryable: false }), 404); return sendAcpResult(res, workflow); }
+    if (pathname.startsWith('/workflows/') && pathname.endsWith('/steps') && req.method === 'POST') { const workflowId = pathname.split('/')[2]; const body = await readJsonBody(req); const workflow = await addWorkflowStep(workflowId, body); if (!workflow) return sendAcpError(res, Object.assign(new Error(`Unknown workflow: ${workflowId}`), { code: 'not_found', retryable: false }), 404); return sendAcpResult(res, workflow); }
+    if (pathname.startsWith('/workflows/') && pathname.includes('/steps/') && req.method === 'PATCH') { const parts = pathname.split('/'); const workflowId = parts[2]; const stepId = parts[4]; const body = await readJsonBody(req); const workflow = await closeWorkflowStep(workflowId, stepId, body); if (!workflow) return sendAcpError(res, Object.assign(new Error(`Unknown workflow: ${workflowId}`), { code: 'not_found', retryable: false }), 404); return sendAcpResult(res, workflow); }
+    if (pathname.startsWith('/workflows/') && pathname.endsWith('/finalize') && req.method === 'POST') { const workflowId = pathname.split('/')[2]; const body = await readJsonBody(req); const workflow = await finalizeWorkflow(workflowId, body); if (!workflow) return sendAcpError(res, Object.assign(new Error(`Unknown workflow: ${workflowId}`), { code: 'not_found', retryable: false }), 404); return sendAcpResult(res, workflow); }
+    if (pathname.startsWith('/tools/') && req.method === 'POST') { const toolName = pathname.split('/')[2]; const body = await readJsonBody(req); return sendAcpResult(res, await callToolJson(context, toolName, body)); }
+    return false;
+  } catch (error) {
+    sendAcpError(res, error, 500);
+    return true;
+  }
 }
 
 async function localGenerate(provider, args = {}) {
@@ -394,8 +439,8 @@ async function editImage(args) {
   return { ...result, analysis: analyzeGeneratedArtifact(result, { ...args, prompt }), workflow_hint: createRecommendation({ tool: 'finalize_image', arguments: { input_image: result.output_path, trim: true }, reason: 'Edited assets often need a final trim or resize pass.', confidence: 0.74 }) };
 }
 
-function registerWorkflowForGenerate(args, result) { const workflow = createWorkflow({ objective: args.prompt, provider: resolveProvider(args), model: result.model, prompt: args.prompt, output_path: result.output_path, context: { tool: 'generate_image' } }); appendWorkflowStep(workflow, { tool: 'generate_image', result }); return workflow; }
-function registerWorkflowForEdit(args, result) { const workflow = createWorkflow({ objective: args.prompt, provider: resolveProvider(args), model: result.model, prompt: args.prompt, output_path: result.output_path, context: { tool: 'edit_image' } }); appendWorkflowStep(workflow, { tool: 'edit_image', result }); return workflow; }
+async function registerWorkflowForGenerate(args, result) { const workflow = await createWorkflow({ objective: args.prompt, provider: resolveProvider(args), model: result.model, prompt: args.prompt, output_path: result.output_path, context: { tool: 'generate_image' } }); await appendWorkflowStep(workflow, { tool: 'generate_image', status: 'completed', result }); return workflow; }
+async function registerWorkflowForEdit(args, result) { const workflow = await createWorkflow({ objective: args.prompt, provider: resolveProvider(args), model: result.model, prompt: args.prompt, output_path: result.output_path, context: { tool: 'edit_image' } }); await appendWorkflowStep(workflow, { tool: 'edit_image', status: 'completed', result }); return workflow; }
 async function getProviderStatus() { return { version: VERSION, defaults: { provider: providerFrom(), model: defaultModel(providerFrom()), size: DEFAULT_SIZE }, configured: Object.fromEntries(PROVIDERS.map((provider) => [provider, providerKeyStatus(provider)])), capabilities: { kilo: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openrouter: { chat_image_generation: true, output_modalities: ['image', 'text'], response_shapes: ['choices[0].message.images', 'choices[0].message.content', 'data.output', 'data'], generate: true, edit: true, batch: false, async: false, localEndpoint: false }, openai: { generate: true, edit: true, batch: false, async: false, localEndpoint: false }, gemini: { generate: true, edit: false, batch: false, async: false, localEndpoint: false }, 'openai-compatible': { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, comfyui: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, drawthings: { generate: true, edit: true, batch: false, async: false, localEndpoint: true }, mlx: { generate: true, edit: true, batch: false, async: false, localEndpoint: true } }, runtime: { defaultProvider: env('IMAGE_MCP_DEFAULT_PROVIDER') || undefined, defaultModel: env('IMAGE_MCP_DEFAULT_MODEL') || undefined, outputDir: outputDir(), local: { provider: localProviderFrom() || undefined, endpoint: localEndpointBaseUrl() || undefined, model: localModelName() || undefined, timeoutMs: localTimeoutMs(), autostart: localAutostartEnabled(), bootstrap: localBootstrapEnabled(), setup: localSetupInstructions(localProviderFrom() || 'openai-compatible') } } }; }
 
 async function resizeImage(args = {}) {
@@ -564,9 +609,9 @@ function createServerContext() {
         if (name === 'background_remove' || name === 'resize_image' || name === 'auto_crop') validateProcessingArgs(args);
         if (name === 'optimize_image') validateOptimizeArgs(args);
         if (name === 'finalize_image') validateProcessingArgs({ ...args, backend: args.background_backend, model: args.background_model });
-        if (name === 'kilo_generate_image') { const result = await generateImage(args); const workflow = registerWorkflowForGenerate(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
-        if (name === 'generate_image') { const result = await generateImage(args); const workflow = registerWorkflowForGenerate(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
-        if (name === 'edit_image') { const result = await editImage(args); const workflow = registerWorkflowForEdit(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
+        if (name === 'kilo_generate_image') { const result = await generateImage(args); const workflow = await registerWorkflowForGenerate(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
+        if (name === 'generate_image') { const result = await generateImage(args); const workflow = await registerWorkflowForGenerate(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
+        if (name === 'edit_image') { const result = await editImage(args); const workflow = await registerWorkflowForEdit(args, result); return { content: [{ type: 'text', text: JSON.stringify({ ...result, workflow_id: workflow.workflow_id, next_steps: [workflow.steps.at(-1)?.result?.analysis?.suggestions?.[0]].filter(Boolean) }, null, 2) }] }; }
         if (name === 'background_remove') return { content: imageToolContent(await backgroundRemoveImage(args)) };
         if (name === 'finalize_image') return { content: imageToolContent(await finalizeImage(args)) };
         if (name === 'resize_image') return { content: imageToolContent(await resizeImage(args)) };
@@ -628,7 +673,10 @@ async function main() {
     const host = env('IMAGE_MCP_HTTP_HOST') || '127.0.0.1';
     const port = Number(env('IMAGE_MCP_HTTP_PORT') || 3333);
     const httpServer = http.createServer(async (req, res) => {
-      try { await transport.handleRequest(req, res); } catch (error) { res.statusCode = 500; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ error: String(error?.message || error) })); }
+      try {
+        if (await handleAcpRequest(req, res, context)) return;
+        await transport.handleRequest(req, res);
+      } catch (error) { res.statusCode = 500; res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ error: String(error?.message || error) })); }
     });
     httpServer.listen(port, host, () => { if (debugStartup) process.stderr.write(`img-gen-mcp http listening on http://${host}:${port}\n`); });
     return;

@@ -1,8 +1,8 @@
 # img-gen-mcp
 
-`img-gen-mcp` is a local-first MCP server for image generation, editing, async jobs, batch runs, background removal, optimization, and final asset delivery.
+`img-gen-mcp` is a local-first MCP server for image generation, editing, async jobs, batch runs, background removal, optimization, final asset delivery, and optional ACP-style automation.
 
-It now includes workflow-aware image guidance, persisted workflow state, and explicit step tracking so iterative image jobs can survive restarts and keep better server-side history.
+It now includes workflow-aware image guidance, persisted workflow state, explicit step tracking, and an optional ACP HTTP surface so iterative image jobs can survive restarts and support full automation flows.
 
 It combines:
 - OpenRouter-first image generation
@@ -13,6 +13,7 @@ It combines:
 - batch image generation for prompt sweeps and variants
 - local image generation through OpenAI-compatible endpoints and local bridges for MLX, ComfyUI, Draw Things, and llama.cpp-compatible servers
 - Streamable HTTP transport for remote deployments
+- optional ACP-style HTTP automation routes layered on top of MCP
 - local background cleanup with `rmbg`, `imgly`, and a shared Docker-backed `withoutbg` daemon
 - web optimization with `sharp`
 - deterministic prompt enhancement before generation
@@ -98,6 +99,8 @@ Transport and runtime flags:
 - `IMAGE_MCP_TRANSPORT=http` - opt in to Streamable HTTP transport
 - `IMAGE_MCP_HTTP_HOST` - host for HTTP transport, defaults to `127.0.0.1`
 - `IMAGE_MCP_HTTP_PORT` - port for HTTP transport, defaults to `3333`
+- `IMAGE_MCP_ACP=1` - enable the optional ACP-style automation surface on HTTP transport
+- `IMAGE_MCP_ACP_PATH` - ACP route prefix, defaults to `/acp`
 
 Example MCP config for a local checkout:
 
@@ -162,6 +165,53 @@ Local examples:
 ```
 
 See `docs/public/clients.md` for ready-to-use examples for Kilo, Cursor, and generic MCP clients.
+
+## ACP Automation
+
+`img-gen-mcp` can expose an optional ACP-style HTTP surface for automation clients that want task and workflow primitives in addition to MCP tools.
+
+Enable it with:
+
+```bash
+IMAGE_MCP_TRANSPORT=http IMAGE_MCP_ACP=1 npm start
+```
+
+Route overview:
+
+- `GET /acp/health`
+- `GET /acp/agent`
+- `GET /acp/tools`
+- `POST /acp/tools/:tool_name`
+- `POST /acp/tasks`
+- `GET /acp/tasks/:task_id`
+- `POST /acp/tasks/:task_id/cancel`
+- `POST /acp/workflows`
+- `GET /acp/workflows/:workflow_id`
+- `POST /acp/workflows/:workflow_id/steps`
+- `PATCH /acp/workflows/:workflow_id/steps/:step_id`
+- `POST /acp/workflows/:workflow_id/finalize`
+
+The ACP layer reuses the same MCP tool implementations and workflow persistence. MCP remains the primary protocol, and ACP is an opt-in automation layer on top.
+
+The package ships bundled skills under `skills/` so other users can reuse the same workflow guidance when they install the package or browse the repository.
+
+Use `npm run test:acp` to smoke-test the ACP routes locally.
+
+## Published Package
+
+The package version is `0.11.0`.
+
+After this release is published to GitHub, you can publish to npm manually with:
+
+```bash
+npm publish
+```
+
+If you want to verify the release artifact first, run:
+
+```bash
+npm pack --dry-run
+```
 
 ## Guidance
 
